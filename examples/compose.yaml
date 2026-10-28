@@ -1,0 +1,27 @@
+# Example deployment. Every value is a placeholder: set real ones in your
+# environment or a secrets manager, never in this file.
+services:
+  ricoh-ldap-sync:
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.1.0
+    restart: unless-stopped
+    environment:
+      LDAP_URL: ${LDAP_URL:-ldaps://ldap.example.com:636}
+      LDAP_TLS_NAME: ${LDAP_TLS_NAME:-}
+      LDAP_BIND_DN: ${LDAP_BIND_DN:-uid=printer-sync,ou=people,dc=example,dc=com}
+      LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:?}
+      LDAP_BASE: ${LDAP_BASE:-ou=people,dc=example,dc=com}
+      LDAP_FILTER: ${LDAP_FILTER:-(&(uid=*)(mail=*))}
+      PRINTERS: ${PRINTERS:?}  # e.g. [{"name":"office","host":"192.0.2.10"}]
+      RICOH_USER: ${RICOH_USER:-admin}
+      RICOH_PASSWORD: ${RICOH_PASSWORD:?}
+      # Leave TS_AUTHKEY empty to reach printers directly without Tailscale.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_LOGIN_SERVER: ${TS_LOGIN_SERVER:-}  # e.g. https://headscale.example.com
+      TS_HOSTNAME: ${TS_HOSTNAME:-ricoh-ldap-sync}
+      DRY_RUN: ${DRY_RUN:-true}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
+      MAX_DELETE_FRACTION: ${MAX_DELETE_FRACTION:-0.3}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./data:/data
+      - ./tailscale:/var/lib/tailscale

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+# Raw SOAP/LDAP captures from real devices. Never commit these.
+recordings/

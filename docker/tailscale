@@ -1,0 +1,3 @@
+#!/bin/sh
+# Point the tailscale CLI at the socket tailscaled uses in this container.
+exec /usr/local/lib/tailscale/tailscale --socket=/tmp/tailscaled.sock "$@"

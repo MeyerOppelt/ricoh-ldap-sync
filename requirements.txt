@@ -1,0 +1,8 @@
+# Runtime dependencies, including transitive ones, pinned exactly.
+certifi==2026.10.23
+charset-normalizer==3.5.2
+idna==3.20
+ldap3==2.9.1
+pyasn1==0.6.5
+requests==2.34.2
+urllib3==2.8.0
