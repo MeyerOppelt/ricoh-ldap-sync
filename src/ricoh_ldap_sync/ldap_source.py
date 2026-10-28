@@ -61,11 +61,16 @@ def connect(cfg: Config) -> Connection:
         raise_exceptions=False,
     )
     try:
-        if not conn.bind():
-            raise LdapError(f"bind as {cfg.ldap_bind_dn} failed: {conn.result.get('description')} {conn.result.get('message') or ''}".strip())
+        if conn.bind():
+            return conn
+        error = LdapError(f"bind as {cfg.ldap_bind_dn} failed: {conn.result.get('description')} {conn.result.get('message') or ''}".strip())
     except LDAPException as e:
-        raise LdapError(f"cannot connect to {cfg.ldap_url}: {e}") from e
-    return conn
+        error = LdapError(f"cannot connect to {cfg.ldap_url}: {e}")
+    try:
+        conn.unbind()
+    except LDAPException:
+        pass
+    raise error
 
 
 def search(conn: Connection, cfg: Config) -> list[dict[str, list[str]]]:

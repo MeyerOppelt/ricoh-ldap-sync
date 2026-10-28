@@ -28,10 +28,10 @@ ENV PYTHONPATH=/app/src \
 COPY src ./src
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
-HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=3 \
+HEALTHCHECK --interval=60s --timeout=15s --start-period=180s --retries=3 \
   CMD ["python", "-m", "ricoh_ldap_sync.health"]
 
 # The entrypoint starts as root only to fix volume ownership, then drops to
 # UID 1000 before starting tailscaled and the worker.
 ENTRYPOINT ["tini", "-g", "--", "/usr/local/bin/entrypoint.sh"]
-CMD ["sh", "-c", "python -m ricoh_ldap_sync.check; exec sleep infinity"]
+CMD ["sh", "-c", "python -m ricoh_ldap_sync.check --wait 120; exec sleep infinity"]

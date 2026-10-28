@@ -2,7 +2,7 @@
 # environment or a secrets manager, never in this file.
 services:
   ricoh-ldap-sync:
-    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.1.0
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.0.2
     restart: unless-stopped
     environment:
       LDAP_URL: ${LDAP_URL:-ldaps://ldap.example.com:636}
@@ -25,3 +25,9 @@ services:
     volumes:
       - ./data:/data
       - ./tailscale:/var/lib/tailscale
+    healthcheck:
+      test: ["CMD", "python", "-m", "ricoh_ldap_sync.health"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 180s

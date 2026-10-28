@@ -1,0 +1,74 @@
+# ricoh-ldap-sync next to AzureAD-LDAP-wrapper (https://github.com/ahaenggli/AzureAD-LDAP-wrapper),
+# which serves Microsoft Entra ID users over LDAPS. Both services share this
+# project's network, so the sync reaches the wrapper by service name and never
+# uses the published port.
+#
+# Every value is a placeholder: set real ones in your environment or secrets
+# manager, never in this file.
+services:
+  ldap:
+    image: ahaen/azuread-ldap-wrapper:v2.1.0
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      LDAP_PORT: "13389"
+      AZURE_TENANTID: ${AZURE_TENANTID:?}
+      AZURE_APP_ID: ${AZURE_APP_ID:?}
+      AZURE_APP_SECRET: ${AZURE_APP_SECRET:?}
+      # Bind accounts as user|password, several separated by ||.
+      # Include one for the sync, e.g. ...||printer-sync|<password>
+      LDAP_BINDUSER: ${LDAP_BINDUSER:?}
+      LDAP_DOMAIN: ${LDAP_DOMAIN:-example.com}
+      LDAP_BASEDN: ${LDAP_BASEDN:-dc=example,dc=com}
+      LDAP_ANONYMOUSBIND: ${LDAP_ANONYMOUSBIND:-none}
+      LDAP_READONLY: ${LDAP_READONLY:-true}
+      LDAP_USERS_SYNCONLYINGROUP: ${LDAP_USERS_SYNCONLYINGROUP:-}
+      LDAPS_CERTIFICATE: /certs/ldaps/fullchain.pem
+      LDAPS_KEY: /certs/ldaps/privkey.pem
+    # Publish LDAPS only if clients outside this project need it, and firewall
+    # it to the addresses that do.
+    # ports:
+    #   - "636:13389"
+    volumes:
+      - ./ldap/data:/app/.cache
+      - ./ldap/certs:/certs:ro
+    healthcheck:
+      # Healthy once the wrapper accepts TLS on its port. It only starts
+      # listening after its Microsoft Graph check succeeds.
+      test: ["CMD", "node", "-e", "require('tls').connect({host:'127.0.0.1',port:13389,rejectUnauthorized:false},function(){process.exit(0)}).on('error',function(){process.exit(1)}).setTimeout(5000,function(){process.exit(1)})"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  ricoh-ldap-sync:
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.0.2
+    restart: unless-stopped
+    depends_on:
+      ldap:
+        condition: service_healthy
+    environment:
+      # Connect over the project network; validate the certificate's real name.
+      LDAP_URL: ${SYNC_LDAP_URL:-ldaps://ldap:13389}
+      LDAP_TLS_NAME: ${SYNC_LDAP_TLS_NAME:-ldap.example.com}
+      LDAP_BIND_DN: ${SYNC_LDAP_BIND_DN:-uid=printer-sync,cn=users,dc=example,dc=com}
+      LDAP_BIND_PASSWORD: ${SYNC_LDAP_BIND_PASSWORD:?}
+      LDAP_BASE: ${SYNC_LDAP_BASE:-cn=users,dc=example,dc=com}
+      PRINTERS: ${SYNC_PRINTERS:?}  # e.g. [{"name":"office","host":"192.0.2.10"}]
+      RICOH_USER: ${SYNC_RICOH_USER:-admin}
+      RICOH_PASSWORD: ${SYNC_RICOH_PASSWORD:?}
+      # Leave TS_AUTHKEY empty to reach printers directly without Tailscale.
+      TS_AUTHKEY: ${SYNC_TS_AUTHKEY:-}
+      TS_LOGIN_SERVER: ${SYNC_TS_LOGIN_SERVER:-}  # e.g. https://headscale.example.com
+      TS_HOSTNAME: ${SYNC_TS_HOSTNAME:-ricoh-ldap-sync}
+      DRY_RUN: ${SYNC_DRY_RUN:-true}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
+    volumes:
+      - ./ricoh-ldap-sync/data:/data
+      - ./ricoh-ldap-sync/tailscale:/var/lib/tailscale
+    healthcheck:
+      test: ["CMD", "python", "-m", "ricoh_ldap_sync.health"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 180s

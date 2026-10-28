@@ -115,7 +115,7 @@ def load(env: Mapping[str, str] | None = None) -> Config:
         if parts is None or parts.scheme not in ("ldap", "ldaps") or not parts.hostname:
             problems.append("LDAP_URL must look like ldaps://host[:port] or ldap://host[:port]")
             ldap_url = ""
-    ldap_tls_name = get("LDAP_TLS_NAME") or (urlsplit(ldap_url).hostname or "" if ldap_url else "")
+    ldap_tls_name = get("LDAP_TLS_NAME") or (urlsplit(ldap_url).hostname if ldap_url else None) or ""
 
     ldap_bind_dn = required("LDAP_BIND_DN")
     ldap_bind_password = required("LDAP_BIND_PASSWORD")
@@ -200,6 +200,9 @@ def _printers(env: Mapping[str, str], raw: str, problems: list[str]) -> tuple[Pr
             continue
         if not host or "/" in host or " " in host:
             problems.append(f"PRINTERS[{i}].host must be a hostname or IP, optionally with :port, no scheme or path")
+            continue
+        if host.count(":") > 1 and not host.startswith("["):
+            problems.append(f"PRINTERS[{i}].host: put an IPv6 address in brackets, e.g. [2001:db8::10]")
             continue
         var = password_var(name)
         if var in seen:

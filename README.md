@@ -1,206 +1,524 @@
 # ricoh-ldap-sync
 
 Keeps the local address book on Ricoh multifunction printers in sync with the
-users in an LDAP directory, so scan-to-email destinations stay current without
-anyone editing the printer by hand.
+users in an LDAP directory.
+
+## Why
+
+Scan-to-email only works well when the printer's address book is current. Most
+offices maintain it by hand in Web Image Monitor: someone adds new staff, nobody
+removes leavers, and names drift from the directory. Ricoh printers can search
+an LDAP server from the panel, but that is slower to use than the local address
+book and doesn't give you the index tabs (AB, CD, ...) people are used to.
+
+`ricoh-ldap-sync` treats your directory as the source of truth and keeps each
+printer's local address book matching it: new users appear, renamed users are
+updated, and users who leave are removed. It is careful about what it touches
+(see [Safety](#safety)), and it starts in dry-run mode so you can review exactly
+what it would change.
 
 It runs as one small container. It can reach printers on other networks through
-an embedded Tailscale client (or a self-hosted Headscale server), so it can run
-in the cloud next to your directory and still reach a printer in an office.
+an embedded Tailscale client (also works with a self-hosted Headscale server).
+So it can run in the cloud next to your directory and still reach a printer in
+an office, without a VPN on the host or any inbound firewall rules.
 
 > **Status: pre-release.** `0.0.x` images contain the connectivity check only
 > (`python -m ricoh_ldap_sync.check`). Address book sync arrives in `0.1.0`.
-> The sections below describe how it is designed to work.
+> Sections marked *(0.1.0)* describe how the sync is designed to work.
+
+## Contents
+
+- [How it works](#how-it-works)
+- [Safety](#safety)
+- [Requirements](#requirements)
+- [Setup, step by step](#setup-step-by-step)
+- [Configuration reference](#configuration-reference)
+- [Operations](#operations)
+- [Troubleshooting](#troubleshooting)
+- [Security](#security)
+- [Tested printers](#tested-printers)
+- [Development](#development)
 
 ## How it works
 
-Every `SYNC_INTERVAL_MINUTES` the worker:
-
-1. Reads users from LDAP (`LDAP_BASE`, `LDAP_FILTER`). The display name is the
-   first attribute in `LDAP_ATTR_NAME` that has a value. Emails are compared
-   lowercased. If the LDAP query fails, the whole run is skipped for every
-   printer. An error is never treated as "zero users".
-2. For each printer, opens an address book session over the printer's SOAP
-   interface (the one Ricoh's management tools use, not the web UI), reads the
-   address book, and works out the changes:
-   - **Add** each user who has no entry: name, key display, Title1 index tag from
-     the first letter, and the email as a scan-to-email destination.
-   - **Update** entries whose user's display name changed.
-   - **Delete** entries whose user is no longer in LDAP.
-3. Closes the session, always, even after an error. A stuck session can lock the
-   address book on the printer's panel.
-
-Each printer syncs on its own, so one printer failing doesn't block the others.
-
-### Ownership: it only touches what it created
-
-The sync records every entry it creates in `/data/state.json` (printer, email,
-entry ID, name, last sync time). It only ever updates or deletes entries listed
-there.
-
-- If an entry someone created by hand already has a user's email, the sync
-  leaves it alone, doesn't add a duplicate, and logs one warning per run.
-- If the state file is missing, nothing is deleted. An existing entry is adopted
-  only when its name and email exactly match what the sync would write. Each
-  adoption is logged.
-
-### Safety brake
-
-For a printer, all deletes are skipped and an error is logged if:
-
-- LDAP returned 0 users, or
-- the deletes would remove more than `MAX_DELETE_FRACTION` (default `0.3`) of
-  that printer's managed entries.
-
-Adds and updates still go ahead.
-
-### Dry run
-
-`DRY_RUN=true` is the default. The worker logs the plan (adds, updates and
-deletes for each printer) and writes nothing to any printer. Check the plan in
-the logs, then set `DRY_RUN=false`.
-
-## Configuration
-
-All configuration is through environment variables. The container checks them
-at startup and exits with a message naming each missing or malformed variable.
-
-| Variable | Required | Default | Notes |
-| --- | --- | --- | --- |
-| `LDAP_URL` | yes | | e.g. `ldaps://ldap.example.com:636` |
-| `LDAP_TLS_NAME` | no | host from `LDAP_URL` | Name the server certificate must be valid for. Lets you connect to a container name while validating the certificate's real name. |
-| `LDAP_BIND_DN` | yes | | |
-| `LDAP_BIND_PASSWORD` | yes | | |
-| `LDAP_BASE` | yes | | e.g. `ou=people,dc=example,dc=com` |
-| `LDAP_FILTER` | no | `(&(uid=*)(mail=*))` | |
-| `LDAP_ATTR_NAME` | no | `displayName,cn,uid` | Tried in order. |
-| `LDAP_ATTR_MAIL` | no | `mail` | |
-| `PRINTERS` | yes | | JSON list, e.g. `[{"name":"office","host":"192.0.2.10"}]`. Names may use letters, digits, `-` and `_`. |
-| `RICOH_USER` | no | `admin` | |
-| `RICOH_PASSWORD` | yes | | Used for every printer unless `RICOH_PASSWORD_<NAME>` is set (name uppercased, `-` replaced with `_`), e.g. `RICOH_PASSWORD_OFFICE`. |
-| `TS_AUTHKEY` | no | | If unset, Tailscale doesn't start and printers are reached directly. |
-| `TS_LOGIN_SERVER` | no | Tailscale's default | Set this for Headscale, e.g. `https://headscale.example.com`. |
-| `TS_HOSTNAME` | no | `ricoh-ldap-sync` | |
-| `SYNC_INTERVAL_MINUTES` | no | `15` | |
-| `DRY_RUN` | no | `true` | |
-| `MAX_DELETE_FRACTION` | no | `0.3` | |
-| `LOG_LEVEL` | no | `info` | `debug`, `info`, `warning` or `error` |
-
-Volumes:
-
-| Path | Holds |
-| --- | --- |
-| `/data` | `state.json` (which entries the sync owns) and `last_success` (healthcheck). |
-| `/var/lib/tailscale` | The Tailscale node identity, so the auth key is only used once. |
-
-The container starts as root only to make these volumes writable by UID 1000,
-then runs `tailscaled` and the worker as UID 1000.
-
-## Deploying
-
-### Docker Compose
-
-See [`examples/compose.yaml`](examples/compose.yaml). Put real values in an
-environment file or your secrets manager, not in the compose file.
-
-```bash
-docker compose -f examples/compose.yaml up -d
-docker compose -f examples/compose.yaml logs -f
+```
+ ┌──────────────── container ────────────────┐
+ │                                           │   LDAPS (direct)    ┌──────────────┐
+ │  worker ──────────────────────────────────┼────────────────────►│ LDAP server  │
+ │    │                                      │                     └──────────────┘
+ │    │ HTTP via proxy localhost:1055        │
+ │    ▼                                      │   tailnet           ┌──────────────┐   LAN   ┌─────────┐
+ │  tailscaled (userspace, optional) ────────┼────────────────────►│ subnet router├────────►│ printer │
+ │                                           │                     └──────────────┘         └─────────┘
+ └───────────────────────────────────────────┘
 ```
 
-### Coolify
+- **Two processes in one container:** `tailscaled` (only when `TS_AUTHKEY` is
+  set) and the worker. `tini` is PID 1. If either process exits, the container
+  exits and your orchestrator restarts it.
+- **Printer traffic goes through Tailscale; nothing else does.** `tailscaled`
+  runs in userspace networking mode with an HTTP proxy on `localhost:1055`. The
+  worker passes that proxy only on the HTTP session it uses for printers. There
+  is no global `HTTP_PROXY`. Userspace mode needs no `NET_ADMIN` and no
+  `/dev/net/tun`, and doesn't touch the host's routing.
+- **LDAP traffic goes straight to the server**, for example over a Docker
+  network to an LDAP container in the same compose project.
+- **The printer protocol is Ricoh's address book SOAP service**
+  (`/DH/udirectory`), the interface Ricoh's own management tools use. The web
+  UI is never scraped.
 
-Add the service from `examples/compose.yaml` to a Docker Compose resource, or
-paste it as a second service into an existing one. Coolify shows every
-`${VAR:?}` as a required variable and blocks the deploy until it is set. If the
-LDAP server runs in the same compose resource, set `LDAP_URL` to its service
-name and port (e.g. `ldaps://ldap:636`) and `LDAP_TLS_NAME` to the name on its
-certificate.
+Each run *(0.1.0)*:
 
-If several services in the resource share variable names, prefix this
-service's Coolify variables (e.g. `LDAP_URL: ${SYNC_LDAP_URL:?}`).
+1. Reads users from LDAP: `LDAP_BASE`, `LDAP_FILTER`. The display name is the
+   first of `LDAP_ATTR_NAME` that has a value. Emails are compared lowercased.
+2. For each printer, opens an address book session, reads the entries, and
+   works out the changes:
+   - **Add** each user without an entry: name, key display, the Title1 index tag
+     for the first letter, and the email as a scan-to-email destination. Not a
+     sender, no folder, no fax.
+   - **Update** entries whose user's display name changed in LDAP.
+   - **Delete** entries whose user is no longer in LDAP.
+3. Closes the session in every case, even after an error. Sessions use a short
+   time limit, because an open session can lock the address book on the panel.
+4. Writes `/data/last_success`, which the container healthcheck reads.
 
-### Tailscale or Headscale
+Printers sync independently: one failing doesn't block the others. When a
+printer's address book is full, adds stop and an error is logged.
 
-With `TS_AUTHKEY` set, the container runs `tailscaled` in userspace networking
-mode. It needs no `NET_ADMIN`, no `/dev/net/tun`, and doesn't change the host's
-routing. Printer traffic, and only printer traffic, goes through its HTTP proxy
-on `localhost:1055`. LDAP traffic does not use the tailnet.
+## Safety
 
-1. On the printer's network, run a subnet router that advertises the printer,
-   e.g. `tailscale set --advertise-routes=192.0.2.10/32`.
-2. Approve that route in the Tailscale admin console or in Headscale.
-3. Create an auth key for this container: non-reusable, not ephemeral, short
-   expiry. For Headscale, check `headscale preauthkeys create --help`. The
-   flags differ between versions. For example:
-   `headscale preauthkeys create --user <user> --expiration 24h`.
-4. Set `TS_AUTHKEY` (and `TS_LOGIN_SERVER` for Headscale) and deploy.
+The sync is built so that a misconfiguration or outage leaves the printer
+alone rather than emptying it.
 
-The key is only used for the first login. After that the node key in
-`/var/lib/tailscale` is reused, so the key can expire.
+- **It only touches entries it created.** Every entry it creates is recorded in
+  `/data/state.json` (printer, email, entry ID, name written, last sync). It only
+  ever updates or deletes entries listed there. Entries people created by hand
+  are never changed.
+- **No duplicates of manual entries.** If a hand-made entry already has a user's
+  email, the sync leaves it alone, doesn't add a second one, and logs one
+  warning per run.
+- **A missing state file never causes deletes.** Without a state file nothing
+  is deleted. An existing entry is adopted only when its name and email exactly
+  match what the sync would write, and each adoption is logged.
+- **LDAP errors skip the run.** If the LDAP query fails for any reason
+  (connection refused, bind failure, size limit, timeout), the whole run is
+  skipped for every printer. An error is never treated as "zero users".
+- **Safety brake.** For a printer, all deletes are skipped and an error is
+  logged if LDAP returned 0 users, or if the deletes would remove more than
+  `MAX_DELETE_FRACTION` (default `0.3`) of that printer's managed entries. Adds
+  and updates still go ahead.
+- **Dry run by default.** With `DRY_RUN=true` (the default) the worker logs the
+  plan (adds, updates and deletes for each printer) and writes nothing.
 
-### Without Tailscale
+## Requirements
 
-Leave `TS_AUTHKEY` unset. The worker connects to each printer's `host`
-directly, so the container must be able to reach it (for example, run it on a
-machine in the same building).
+**Printer**
+- A Ricoh MFP with Web Image Monitor over HTTP. See
+  [Tested printers](#tested-printers).
+- An account that can edit the address book. On Ricoh this is the *user
+  administrator* role, which can be a different account from the machine
+  administrator. On many printers one `admin` account has every role.
 
-### Adding a printer
+**LDAP**
+- A bind account with read access to your users. Read-only is enough.
+- Users with an email attribute (`mail` by default) and a name attribute
+  (`displayName`, `cn` or `uid` by default).
+- LDAPS recommended. Plain `ldap://` works, but sends the bind password
+  unencrypted.
 
-Add an object to `PRINTERS`, set `RICOH_PASSWORD_<NAME>` if its password
-differs, and, with Tailscale, advertise and approve a route to it. Restart the
-container and run the connectivity check.
+**Host**
+- Docker on `linux/amd64` or `linux/arm64`.
+- Either a network path to each printer, or a Tailscale/Headscale tailnet with
+  a subnet router at each printer's site.
 
-## Connectivity check
+## Setup, step by step
 
-The check changes nothing. It reports the tailnet state, the subnet route for
-each printer, whether each printer's web page answers, and LDAP DNS, TLS, bind
-and search results. It prints counts only, never names or emails.
+### 1. Create the LDAP bind account
+
+Create a dedicated, read-only account for the sync, for example
+`uid=printer-sync,ou=people,dc=example,dc=com`. Don't reuse the account the
+printers use for panel search, so you can rotate or revoke it separately.
+
+To check what the directory returns, run this from any machine that can reach
+it (it needs `ldap-utils`):
+
+```bash
+ldapsearch -H ldaps://ldap.example.com:636 -D 'uid=printer-sync,ou=people,dc=example,dc=com' -W \
+  -b 'ou=people,dc=example,dc=com' '(&(uid=*)(mail=*))' uid cn displayName mail
+```
+
+### 2. Check the printer account
+
+Log in to Web Image Monitor as the account you'll use and check that you can
+edit the address book (**Device Management > Address Book**). If you can't,
+give the account the user administrator role, or use the account that has it.
+
+### 3. Give the container a path to each printer
+
+Pick one of the two options below.
+
+#### Option A: direct (no Tailscale)
+
+If the container's host can reach the printers (for example it runs on a
+server in the same building), leave `TS_AUTHKEY` unset. The worker connects to
+each printer's `host` directly. Skip to step 4.
+
+#### Option B: through a Tailscale or Headscale tailnet
+
+You need a subnet router on each printer's network. That's any machine running
+Tailscale that can reach the printer. Then:
+
+1. **Advertise the printer's address** from the subnet router. A `/32` limits
+   it to the one device:
+
+   ```bash
+   tailscale set --advertise-routes=192.0.2.10/32
+   ```
+
+   `tailscale set` changes only the flags you give, so an existing exit-node
+   setting stays.
+
+2. **Approve the route.** In the Tailscale admin console, open the router's
+   machine page > **Edit route settings**. On Headscale (0.26 and later):
+
+   ```bash
+   headscale nodes list-routes
+   headscale nodes approve-routes --identifier <router-id> --routes <every route to approve, comma-separated>
+   ```
+
+   `--routes` replaces the node's approved list, so include routes that are
+   already approved (for example `0.0.0.0/0,::/0` for an exit node). Older
+   Headscale versions use `headscale routes list` and
+   `headscale routes enable -r <id>`.
+
+3. **Allow it in your ACL policy, if you have one.** With no policy, everything
+   is allowed and you can skip this. Once a policy exists, the tailnet is
+   deny-by-default. The control server also *hides* a subnet route from any node
+   the policy doesn't let reach it, so a missing rule looks like an unapproved
+   route. Three common surprises:
+   - A destination like `tag:servers:*` covers those machines' own tailnet
+     addresses, **not** the subnets they route. Name the printer's address
+     instead.
+   - `autogroup:self` covers devices owned by a user, never tagged devices.
+   - `autogroup:internet` is exit-node traffic and excludes private ranges.
+
+   A minimal rule, giving the sync node its own tag:
+
+   ```json
+   {
+     "hosts": { "office-printer": "192.0.2.10/32" },
+     "tagOwners": { "tag:printer-sync": ["group:admin"] },
+     "acls": [
+       { "action": "accept", "src": ["tag:printer-sync"], "dst": ["office-printer:80"] }
+     ]
+   }
+   ```
+
+   Port 80 covers both Web Image Monitor and the address book service.
+
+4. **Create an auth key for the container:** non-reusable, not ephemeral,
+   short expiry. Give it your sync tag if you use one. On Headscale, flags
+   differ between versions, so check `headscale preauthkeys create --help`:
+
+   ```bash
+   headscale preauthkeys create --user <user> --expiration 24h
+   ```
+
+   The key is only used for the container's first login. After that the node
+   identity in `/var/lib/tailscale` is reused, so the key can expire.
+
+5. **For Headscale, set `TS_LOGIN_SERVER`** to your server's URL, e.g.
+   `https://headscale.example.com`. The container refuses to start if it sees a
+   Headscale key (`hskey-...`) without `TS_LOGIN_SERVER`, rather than sending
+   the key to Tailscale's servers.
+
+### 4. Configure
+
+All settings are environment variables. They're listed in full in the
+[Configuration reference](#configuration-reference). The required ones are
+`LDAP_URL`, `LDAP_BIND_DN`, `LDAP_BIND_PASSWORD`, `LDAP_BASE`, `PRINTERS`, and
+`RICOH_PASSWORD` (or a per-printer `RICOH_PASSWORD_<NAME>`).
+
+`PRINTERS` is a JSON list. Each printer has a `name` and a `host`:
+
+```json
+[{"name":"office","host":"192.0.2.10"},{"name":"warehouse","host":"192.0.2.20"}]
+```
+
+**Choose printer names carefully.** The sync records which entries it owns
+under each name, so renaming a printer later means it no longer recognises its
+own entries there. To recover from that, see
+[Reset ownership state](#reset-ownership-state).
+
+The container checks every variable at startup. If anything is missing or
+malformed, it exits with a list naming each bad variable. Secret values are
+never printed.
+
+### 5. Deploy
+
+#### Docker Compose
+
+Start from one of the examples, and put real values in an `.env` file next to
+it or in your secrets manager, not in the compose file:
+
+- [`examples/compose.yaml`](examples/compose.yaml): the sync on its own, for
+  any LDAP server it can reach.
+- [`examples/compose.with-azuread-ldap-wrapper.yaml`](examples/compose.with-azuread-ldap-wrapper.yaml):
+  the sync next to [AzureAD-LDAP-wrapper](https://github.com/ahaenggli/AzureAD-LDAP-wrapper),
+  which serves Microsoft Entra ID users over LDAPS. Both services have
+  healthchecks, and the sync waits for the wrapper to be healthy before
+  starting.
+
+```bash
+docker compose up -d
+docker compose logs -f ricoh-ldap-sync
+```
+
+Always reference an exact image version, e.g.
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.0.2`, never `latest`. That way an
+upgrade happens only when you change the tag.
+
+#### Coolify
+
+1. Add the service to a **Docker Compose** resource. If your LDAP server is
+   already a compose resource in Coolify, paste this service into that same
+   resource as a second service. They then share a network, and the sync can
+   reach LDAP by its service name.
+2. Coolify lists every `${VAR}` from the compose file under **Environment
+   Variables**. Variables written `${VAR:?}` are required, and Coolify blocks
+   the deploy until they're set. Variables written `${VAR:-default}` show their
+   default.
+3. If the resource already has variables with the same names (for example an
+   LDAP container using `LDAP_URL`), map them to prefixed Coolify variables:
+
+   ```yaml
+   environment:
+     LDAP_URL: ${SYNC_LDAP_URL:-ldaps://ldap:636}
+     LDAP_BIND_PASSWORD: ${SYNC_LDAP_BIND_PASSWORD:?}
+   ```
+
+4. Click **Deploy**. Deploying a compose resource restarts **every** service in
+   it, so an LDAP server in the same resource is briefly unavailable. Give the
+   LDAP service a healthcheck, and make the sync depend on it with
+   `condition: service_healthy` (as in the wrapper example). The sync then
+   starts only once LDAP is ready. Without that, the startup check still waits
+   up to 120 s for LDAP, and the sync skips any run where LDAP is down. Coolify
+   shows each service's health next to its status.
+
+**Reaching LDAP in the same compose project.** Set `LDAP_URL` to the
+container's service name and internal port, for example
+`ldaps://ldap:13389`. Set `LDAP_TLS_NAME` to the name on its certificate, for
+example `ldap.example.com`. The connection goes over the Docker network, while
+the certificate is still validated against its real name. This also avoids
+problems with a public LDAP port that is firewalled to particular addresses.
+
+**Volumes.** Both `/data` and `/var/lib/tailscale` must be persistent. Bind
+mounts (`./data:/data`) and named volumes both work. Docker creates bind-mount
+directories owned by root, so the container starts as root, makes the two
+directories writable by UID 1000, and then runs `tailscaled` and the worker as
+UID 1000.
+
+### 6. Verify the connection
+
+On every start the container runs a read-only connectivity check and prints
+the result in its logs. You can run it again at any time:
 
 ```bash
 docker exec <container> python -m ricoh_ldap_sync.check
 ```
 
-Debugging tools in the image: `curl`, `openssl`, `dig`, `ldapsearch`, `nc`, and
-`tailscale`, which is already pointed at the container's daemon:
+In Coolify, use the service's **Terminal** tab and run
+`python -m ricoh_ldap_sync.check`.
+
+A healthy result looks like this:
+
+```
+INFO config: 1 printer(s): office=192.0.2.10; LDAP ldaps://ldap:13389 (certificate name ldap.example.com)
+PASS data volume: /data is writable
+PASS tailscale: state Running, node ricoh-ldap-sync 100.64.0.5, fd7a:115c:a1e0::5
+PASS tailscale accept-routes: True
+PASS route office: 192.0.2.10 via office-router (192.0.2.10/32)
+PASS printer office: HTTP 200, final path /, title 'Web Image Monitor'
+PASS ldap dns: ldap -> 172.18.0.2
+PASS ldap tls: certificate valid for ldap.example.com, issuer Let's Encrypt, expires Jan 26 21:35:21 2027 GMT
+PASS ldap bind: bound as uid=printer-sync,ou=people,dc=example,dc=com
+PASS ldap search: 24 entries, 24 usable users; entries with each attribute: displayName=24, cn=24, uid=24, mail=24
+RESULT: all checks passed
+```
+
+| Line | Checks |
+| --- | --- |
+| `data volume` | `/data` is writable, so the state file can be saved. |
+| `tailscale` | `tailscaled` is logged in and Running. Only shown when `TS_AUTHKEY` is set. |
+| `tailscale accept-routes` | The node accepts subnet routes. |
+| `route <printer>` | A peer has an approved route covering the printer's IP, and is online. |
+| `printer <printer>` | The printer's web page answers through the proxy, or directly when Tailscale is off. |
+| `ldap dns` / `ldap tls` / `ldap bind` | Name resolution, the certificate validated against `LDAP_TLS_NAME`, and the bind account. |
+| `ldap search` | How many entries the filter returns, how many are usable (they have an email and a name), and how many have each attribute. Use this to choose `LDAP_ATTR_NAME`. |
+
+The check prints counts only. It never prints names, email addresses or
+secrets.
+
+The image also includes `curl`, `openssl`, `dig`, `ldapsearch`, `nc` and `ps`
+for debugging. `tailscale` is already pointed at the container's daemon:
 
 ```bash
 docker exec <container> tailscale status
 docker exec <container> curl -sI -x http://localhost:1055 http://192.0.2.10/
 ```
 
+### 7. Review the dry run, then go live *(0.1.0)*
+
+With `DRY_RUN=true`, each run logs one line per planned change:
+
+```
+plan printer=office action=add email=alice@example.com name="Alice Example"
+plan printer=office action=update email=bob@example.com name="Robert Example" (was "Bob Example")
+plan printer=office action=delete email=carol@example.com
+```
+
+Check that the adds are the people you expect. When the plan looks right, set
+`DRY_RUN=false` and redeploy. Then:
+
+1. Check the new entries on the printer's panel.
+2. Wait for the next run. It should report no changes.
+3. Remove a test user from the directory. Their entry should go on the run after.
+
+## Configuration reference
+
+| Variable | Required | Default | Notes |
+| --- | --- | --- | --- |
+| `LDAP_URL` | yes | | `ldaps://host[:port]` or `ldap://host[:port]`, e.g. `ldaps://ldap.example.com:636`. |
+| `LDAP_TLS_NAME` | no | host from `LDAP_URL` | Name the server certificate must be valid for. Lets you connect to a container name while validating the certificate's real name. |
+| `LDAP_BIND_DN` | yes | | |
+| `LDAP_BIND_PASSWORD` | yes | | |
+| `LDAP_BASE` | yes | | Search base, e.g. `ou=people,dc=example,dc=com`. |
+| `LDAP_FILTER` | no | `(&(uid=*)(mail=*))` | Which entries are users. |
+| `LDAP_ATTR_NAME` | no | `displayName,cn,uid` | Name attributes, tried in order. |
+| `LDAP_ATTR_MAIL` | no | `mail` | Email attribute. |
+| `PRINTERS` | yes | | JSON list of `{"name","host"}`. Names: letters, digits, `-`, `_`. Host: name or IP, optional `:port`, IPv6 in brackets. |
+| `RICOH_USER` | no | `admin` | Printer account with the user administrator role. |
+| `RICOH_PASSWORD` | yes* | | Used for every printer without its own override. *Optional if every printer has one. |
+| `RICOH_PASSWORD_<NAME>` | no | | Per-printer password. `<NAME>` is the printer name uppercased, with `-` replaced by `_` (`office-2` → `RICOH_PASSWORD_OFFICE_2`). |
+| `TS_AUTHKEY` | no | | Tailscale/Headscale auth key. If unset, Tailscale doesn't start and printers are reached directly. |
+| `TS_LOGIN_SERVER` | no | Tailscale's default | Required for Headscale, e.g. `https://headscale.example.com`. |
+| `TS_HOSTNAME` | no | `ricoh-ldap-sync` | Node name on the tailnet. |
+| `SYNC_INTERVAL_MINUTES` | no | `15` | Minutes between runs. |
+| `DRY_RUN` | no | `true` | `true` logs the plan only. `false` writes to printers. |
+| `MAX_DELETE_FRACTION` | no | `0.3` | Safety brake threshold, 0 to 1. |
+| `LOG_LEVEL` | no | `info` | `debug`, `info`, `warning` or `error`. |
+
+| Volume | Holds | If lost |
+| --- | --- | --- |
+| `/data` | `state.json` (which entries the sync owns) and `last_success`. | Nothing is deleted. Existing entries are re-adopted only on an exact match. |
+| `/var/lib/tailscale` | The node identity. | The container needs a new `TS_AUTHKEY` and joins as a new node. |
+
+Image tags: `X.Y.Z` (exact release, use this), `X.Y` (latest patch of a minor
+version) and `sha-<commit>`. There is no `latest` tag.
+
 ## Operations
 
-- **Rotate the LDAP or printer password:** update the variable and redeploy.
-- **Rotate the Tailscale node:** remove the node in the admin console or
-  Headscale, empty the `/var/lib/tailscale` volume, set a fresh `TS_AUTHKEY`,
+**Logs.** One line per action (printer, action, email, result) *(0.1.0)*. The
+tool never logs passwords or the auth key. `tailscaled` is chatty: lines
+starting `magicsock:`, `wgengine:`, `dns:` and `netmap:` are normal.
+
+**Health.** The image has a healthcheck (`python -m ricoh_ldap_sync.health`),
+and the examples repeat it so it's visible in the compose file. It fails if
+Tailscale is enabled but not Running. From `0.1.0` it also fails if the last
+successful run is older than 3 × `SYNC_INTERVAL_MINUTES`. Docker and Coolify
+report an unhealthy container but don't restart it. The container does exit,
+and get restarted, if `tailscaled` or the worker stops.
+
+**Upgrade.** Read the [changelog](CHANGELOG.md), change the image tag, and
+redeploy.
+
+**Add a printer.**
+1. Add it to `PRINTERS`, and set `RICOH_PASSWORD_<NAME>` if its password differs.
+2. With Tailscale: advertise and approve a route to it, and allow it in your
+   ACL policy (step 3).
+3. Redeploy, and check that the startup check shows `PASS route` and
+   `PASS printer` for it.
+4. Leave `DRY_RUN=true` for a run to review its plan, if you like.
+
+**Rotate secrets.**
+- *LDAP or printer password:* change it at the source, update the variable,
   and redeploy.
-- **Reset ownership state:** stop the container and delete `/data/state.json`.
-  On the next run nothing is deleted, and existing entries are adopted only
-  when their name and email match exactly.
+- *Tailscale node:* delete the node in the admin console or Headscale, empty
+  the `/var/lib/tailscale` volume, set a fresh `TS_AUTHKEY`, and redeploy.
+
+<a id="reset-ownership-state"></a>
+**Reset ownership state.** Stop the container, delete `/data/state.json`, and
+start it. Nothing is deleted on the next run. Existing entries are adopted only
+where name and email match exactly, and each adoption is logged.
+
+**Remove the sync.** Stop the container. The entries it created stay on the
+printers. Delete them in Web Image Monitor if you no longer want them.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Container exits with `Invalid configuration:` | The message lists each missing or malformed variable. Fix those and redeploy. |
+| `TS_AUTHKEY is a Headscale key but TS_LOGIN_SERVER is not set` | Set `TS_LOGIN_SERVER` to your Headscale URL. |
+| `tailscale up failed` or `did not reach Running` | Wrong `TS_LOGIN_SERVER`, or the key is expired or already used and there's no saved node state. Create a new key. |
+| `FAIL route <printer>: no peer has an approved route` | The subnet router isn't advertising the address, the route isn't approved, or the ACL policy doesn't allow this node to reach it. A policy also hides the route, so check all three (step 3). |
+| `FAIL printer <printer>: ... ReadTimeout` with Tailscale on | With no tailnet route, the proxy tries the address on the host's own network, where it goes nowhere. Same causes as the row above. |
+| `FAIL printer <printer>: ... ConnectTimeout` with Tailscale off | The host can't reach the printer. Check the IP, the network, and that Web Image Monitor is enabled. |
+| `FAIL ldap reachable` or `ldap tls: ... Connection refused` | The LDAP server isn't listening yet (for example, just restarted by a deploy), or the host and port are wrong. Run the check again after a minute. |
+| `FAIL ldap dns` | The name in `LDAP_URL` doesn't resolve. For a container in the same compose project, use its service name and check both services are in the same project. |
+| `ldap tls: certificate not valid for <name>: Hostname mismatch` | `LDAP_TLS_NAME` doesn't match the certificate. Set it to the name the certificate was issued for. |
+| `ldap tls: ... unable to get local issuer certificate` or `certificate has expired` | The certificate isn't publicly trusted (self-signed or private CA) or has expired. Use a publicly trusted certificate, for example from Let's Encrypt, and renew it. |
+| `ldap bind ... invalidCredentials` | Wrong bind DN or password. |
+| `ldap search: 0 entries` | Wrong `LDAP_BASE` or `LDAP_FILTER`, or the bind account can't read users. |
+| `FAIL data volume` | `/data` isn't writable. Check the volume mount. |
+| `UDIRECTORY_PERMISSION_DENIED` *(0.1.0)* | The printer account lacks the user administrator role, or the model blocks address book writes over SOAP. See [Tested printers](#tested-printers). |
+| Address book locked on the panel | An address book session was left open. It ends when its time limit runs out. Restarting the printer also clears it. |
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+
+The container holds each printer's admin password, the LDAP bind password, and
+(with Tailscale) a node key. So:
+
+- Run it on a host you trust, and keep its volumes private to that host.
+- Give the LDAP account read-only access.
+- With Tailscale, give the node its own tag and an ACL that allows only the
+  printers on port 80.
+- Printer traffic is plain HTTP, as Web Image Monitor serves it. With Tailscale
+  it's encrypted between the container and the subnet router. It's plain only
+  on the printer's own LAN.
 
 ## Tested printers
 
 | Model | Firmware | Result |
 | --- | --- | --- |
-| Ricoh IM C2510 | as found | Testing in progress |
+| Ricoh IM C2510 | as found | Connectivity verified. Address book read/write testing in progress. |
 
-Some newer Ricoh models reject address book writes over SOAP with
-`UDIRECTORY_PERMISSION_DENIED` while still allowing deletes. Usually the account
-lacks the *user administrator* role. On some models, writes over SOAP are
-restricted entirely.
+**Known risk:** some newer Ricoh models reject address book writes over SOAP
+(`putObjects`) with `UDIRECTORY_PERMISSION_DENIED`, while deletes still work.
+Usually the account lacks the user administrator role. On some models, writes
+over SOAP are restricted entirely. If you test another model, please open an
+issue with the result.
 
-## Troubleshooting
+## Development
 
-| Symptom | Likely cause |
-| --- | --- |
-| `route <printer>: no peer has an approved route` | The subnet router isn't advertising the printer's address, or the route isn't approved. |
-| `printer <name>: GET ... failed` with Tailscale on | Same as above, or the subnet router is offline. Run `tailscale status` in the container. |
-| `ldap tls: certificate not valid for <name>` | `LDAP_TLS_NAME` doesn't match the certificate. Set it to the name on the certificate. |
-| `ldap bind ... invalidCredentials` | Wrong bind DN or password. |
-| `UDIRECTORY_PERMISSION_DENIED` | The printer account isn't a user administrator, or the model blocks SOAP writes. |
-| Address book locked on the panel | A session was left open. It ends when its time limit runs out. Restarting the printer also clears it. |
-| `tailscale did not reach Running` at startup | Wrong `TS_LOGIN_SERVER`, or the auth key is expired or already used and there is no saved node state. |
+```bash
+python3.12 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+docker build -t ricoh-ldap-sync:dev .
+```
+
+Tests need no network, printer or LDAP server. Committed SOAP fixtures are
+synthetic, with made-up names and `@example.com` addresses. Recordings from
+real devices go in `recordings/`, which git ignores.
+
+**Releases.** Pushing a `vX.Y.Z` tag runs the tests, then builds
+`linux/amd64` and `linux/arm64` images and pushes them to
+`ghcr.io/meyeroppelt/ricoh-ldap-sync` as `X.Y.Z`, `X.Y` and `sha-<commit>`. Pull
+requests and pushes to `main` run the tests. Dependabot proposes weekly updates
+for actions, Python packages and base images. Every version is pinned.
 
 ## Acknowledgements
 

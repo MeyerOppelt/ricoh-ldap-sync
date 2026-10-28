@@ -7,16 +7,20 @@ counts only, never names, email addresses or secrets.
 
 from __future__ import annotations
 
+import argparse
+import os
 import re
 import socket
 import ssl
 import sys
+import time
 
 import requests
 
 from . import config, ldap_source, tailnet
 
 PRINTER_TIMEOUT = (10, 20)
+DATA_DIR = "/data"
 
 
 class Report:
@@ -81,7 +85,39 @@ def check_printers(cfg: config.Config, r: Report) -> None:
                    f"title {title.group(1).strip()[:60]!r}" if title else f"HTTP {resp.status_code}, no title")
 
 
-def check_ldap(cfg: config.Config, r: Report) -> None:
+def wait_for_port(host: str, port: int, timeout: float, *, connect=socket.create_connection,
+                  sleep=time.sleep, clock=time.monotonic) -> float | None:
+    """Retry a TCP connect until it succeeds or timeout passes. Returns seconds waited, or None."""
+    start = clock()
+    while True:
+        try:
+            connect((host, port), timeout=5).close()
+            return clock() - start
+        except OSError:
+            if clock() - start >= timeout:
+                return None
+            sleep(2)
+
+
+def check_data(r: Report) -> None:
+    probe = os.path.join(DATA_DIR, ".write-test")
+    try:
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+        r.line("PASS", "data volume", f"{DATA_DIR} is writable")
+    except OSError as e:
+        r.line("FAIL", "data volume", f"{DATA_DIR} is not writable: {e.strerror}")
+
+
+def check_ldap(cfg: config.Config, r: Report, wait: float = 0) -> None:
+    if wait:
+        # Right after a deploy the LDAP server may still be starting.
+        waited = wait_for_port(cfg.ldap_host, cfg.ldap_port, wait)
+        if waited is None:
+            r.line("FAIL", "ldap reachable", f"{cfg.ldap_host}:{cfg.ldap_port} not accepting connections after {wait:.0f}s")
+        elif waited >= 1:
+            r.line("INFO", "ldap reachable", f"{cfg.ldap_host}:{cfg.ldap_port} accepted connections after {waited:.0f}s")
     try:
         addrs = sorted({ai[4][0] for ai in socket.getaddrinfo(cfg.ldap_host, cfg.ldap_port, type=socket.SOCK_STREAM)})
         r.line("PASS", "ldap dns", f"{cfg.ldap_host} -> {', '.join(addrs)}")
@@ -99,7 +135,11 @@ def check_ldap(cfg: config.Config, r: Report) -> None:
             r.line("PASS", "ldap tls", f"certificate valid for {cfg.ldap_tls_name}, issuer {issuer.get('organizationName') or issuer.get('commonName')}, "
                    f"expires {cert.get('notAfter')}")
         except ssl.SSLCertVerificationError as e:
-            r.line("FAIL", "ldap tls", f"certificate not valid for {cfg.ldap_tls_name}: {e.verify_message}. Set LDAP_TLS_NAME to the name on the certificate")
+            if e.verify_code == 62:  # X509_V_ERR_HOSTNAME_MISMATCH
+                hint = "Set LDAP_TLS_NAME to the name on the certificate"
+            else:
+                hint = "The certificate is not trusted by the container's CA store (self-signed, private CA or expired)"
+            r.line("FAIL", "ldap tls", f"certificate not valid for {cfg.ldap_tls_name}: {e.verify_message}. {hint}")
             return
         except OSError as e:
             r.line("FAIL", "ldap tls", f"{cfg.ldap_host}:{cfg.ldap_port}: {e}")
@@ -129,7 +169,11 @@ def check_ldap(cfg: config.Config, r: Report) -> None:
         conn.unbind()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m ricoh_ldap_sync.check", description=__doc__.splitlines()[0])
+    parser.add_argument("--wait", type=float, default=0, metavar="SECONDS",
+                        help="wait up to SECONDS for the LDAP server to accept connections (used at container start)")
+    args = parser.parse_args(argv)
     try:
         cfg = config.load()
     except config.ConfigError as e:
@@ -138,9 +182,10 @@ def main() -> int:
     r = Report()
     r.line("INFO", "config", f"{len(cfg.printers)} printer(s): " + ", ".join(f"{p.name}={p.host}" for p in cfg.printers)
            + f"; LDAP {cfg.ldap_url} (certificate name {cfg.ldap_tls_name})")
+    check_data(r)
     check_tailnet(cfg, r)
     check_printers(cfg, r)
-    check_ldap(cfg, r)
+    check_ldap(cfg, r, wait=args.wait)
     print("RESULT: " + ("FAILED" if r.failed else "all checks passed"), flush=True)
     return 1 if r.failed else 0
 

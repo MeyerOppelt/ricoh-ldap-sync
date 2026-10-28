@@ -98,6 +98,7 @@ def test_missing_printer_password():
     ('[{"name":"bad name","host":"192.0.2.10"}]', ".name"),
     ('[{"name":"a","host":"http://192.0.2.10"}]', ".host"),
     ('[{"name":"a"}]', ".host"),
+    ('[{"name":"a","host":"2001:db8::10"}]', "IPv6"),
     ('[{"name":"a-b","host":"192.0.2.10"},{"name":"A_B","host":"192.0.2.11"}]', "more than one printer"),
 ])
 def test_bad_printers(printers, fragment):
