@@ -147,6 +147,9 @@ def load(env: Mapping[str, str] | None = None) -> Config:
     if log_level not in LOG_LEVELS:
         problems.append(f"LOG_LEVEL must be one of {', '.join(LOG_LEVELS)}")
 
+    if get("TS_AUTHKEY").startswith("hskey-") and not get("TS_LOGIN_SERVER"):
+        problems.append("TS_AUTHKEY is a Headscale key, so TS_LOGIN_SERVER must be set to your Headscale URL")
+
     if problems:
         raise ConfigError(problems)
 

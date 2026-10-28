@@ -4,6 +4,12 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+### Fixed
+
+- Refuse to log in when `TS_AUTHKEY` is a Headscale key (`hskey-`) and
+  `TS_LOGIN_SERVER` is not set, instead of sending the key to Tailscale's
+  default control server.
+
 ## 0.0.1 - 2026-10-28
 
 Pre-release for connectivity testing. No address book sync yet.

@@ -59,6 +59,11 @@ def test_tailscale_enables_proxy():
     assert cfg.ts_login_server == "https://headscale.example.com"
 
 
+def test_headscale_key_requires_login_server():
+    assert any("TS_LOGIN_SERVER" in p for p in problems(TS_AUTHKEY="hskey-auth-x"))
+    assert load(TS_AUTHKEY="hskey-auth-x", TS_LOGIN_SERVER="https://headscale.example.com").tailscale_enabled
+
+
 def test_per_printer_password_override():
     cfg = load(
         PRINTERS='[{"name":"office-1","host":"192.0.2.10"},{"name":"lab","host":"printer.example.com:8080"}]',

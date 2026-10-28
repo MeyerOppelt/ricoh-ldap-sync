@@ -24,6 +24,12 @@ if [[ -z "${TS_AUTHKEY:-}" ]]; then
   exec "$@"
 fi
 
+# Never send a Headscale key to Tailscale's default control server.
+if [[ "$TS_AUTHKEY" == hskey-* && -z "${TS_LOGIN_SERVER:-}" ]]; then
+  log "TS_AUTHKEY is a Headscale key but TS_LOGIN_SERVER is not set; refusing to log in"
+  exit 1
+fi
+
 backend_state() {
   tailscale status --json 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("BackendState",""))' 2>/dev/null \
