@@ -165,6 +165,17 @@ The address book has no company field, but the panel's button label (the
    at `/app/customizer/ldap_customizer.js`. It asks Microsoft Graph for each
    user's Entra **Company name** as well, and serves it as the `company`
    attribute. Your wrapper filters don't change. Redeploy the wrapper.
+   On platforms without file mounts (Coolify compose resources, for example),
+   have the wrapper write the file itself as it starts. Encode it with
+   `base64 -w0 ldap_customizer.js` (on macOS, `base64 -i ldap_customizer.js`),
+   then give the wrapper's service:
+
+   ```yaml
+       entrypoint: ["/bin/sh", "-c", "echo <base64> | base64 -d > /app/customizer/ldap_customizer.js && exec /app/entrypoint.sh"]
+   ```
+
+   The wrapper's own entrypoint then runs as usual. With `LDAP_DEBUG=true`, its
+   log shows `ldap_customizer loaded`. Re-encode the file whenever it changes.
 2. **Turn it on in the sync:** set `LDAP_ATTR_COMPANY=company`.
 3. **Choose short tags (optional):** for example
    `COMPANY_TAGS={"Example Holdings":"EH","Northwind Traders":"NT"}`. Names
