@@ -131,6 +131,31 @@ Things to know before turning it on:
 - **Check your panel's sort setting first.** Some panels can sort by display
   name. If yours does, you may not need `KEEP_SORTED` at all.
 
+### Showing each person's company
+
+The address book has no company field, but the panel's button label (the
+*key display*, 16 characters) can carry a short company tag, such as
+`Alice A. (EH)`. The Name field keeps the full name.
+
+1. **Get the company into LDAP.** The sync reads it from an LDAP attribute
+   named by `LDAP_ATTR_COMPANY`. With
+   [AzureAD-LDAP-wrapper](https://github.com/ahaenggli/AzureAD-LDAP-wrapper),
+   mount
+   [`examples/azuread-ldap-wrapper/ldap_customizer.js`](examples/azuread-ldap-wrapper/ldap_customizer.js)
+   at `/app/customizer/ldap_customizer.js`. It asks Microsoft Graph for each
+   user's Entra **Company name** as well, and serves it as the `company`
+   attribute. Your wrapper filters don't change. Redeploy the wrapper.
+2. **Turn it on in the sync:** set `LDAP_ATTR_COMPANY=company`.
+3. **Choose short tags (optional):** for example
+   `COMPANY_TAGS={"Example Holdings":"EH","Northwind Traders":"NT"}`. Names
+   match ignoring case. A company that isn't listed gets its initials, up to 4
+   letters. People with no company get no tag.
+
+The label is the full name if it fits next to the tag, otherwise "First L.",
+otherwise the first name cut to fit. Turning this on, or changing a
+company or tag, updates the affected entries on the next run. With
+`KEEP_SORTED`, that run may also renumber.
+
 ## Safety
 
 The sync is built so that a misconfiguration or outage leaves the printer
@@ -321,7 +346,7 @@ docker compose logs -f ricoh-ldap-sync
 ```
 
 Always reference an exact image version, e.g.
-`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.3.0`, never `latest`. That way an
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.0`, never `latest`. That way an
 upgrade happens only when you change the tag.
 
 #### Coolify
@@ -488,7 +513,9 @@ docker exec <container> python -m ricoh_ldap_sync --once --dry-run
 | `LDAP_BASE` | yes | | Search base, e.g. `ou=people,dc=example,dc=com`. |
 | `LDAP_FILTER` | no | `(&(uid=*)(mail=*))` | Which entries are users. |
 | `LDAP_ATTR_NAME` | no | `displayName,cn,uid` | Name attributes, tried in order. |
-| `LDAP_ATTR_MAIL` | no | `mail` | Email attribute. |
+| `LDAP_ATTR_MAIL` | no | `mail` | Email attribute. Values that aren't email addresses (for example `null`) are skipped. |
+| `LDAP_ATTR_COMPANY` | no | | Attribute holding each person's company. When set, the button label gets a company tag. See [Showing each person's company](#showing-each-persons-company). |
+| `COMPANY_TAGS` | no | | JSON object of company name to tag (1–6 characters), e.g. `{"Example Holdings":"EH"}`. Unlisted companies use their initials. |
 | `PRINTERS` | yes | | JSON list of `{"name","host"}`, plus an optional `"capacity"` (the most entries the address book holds, for example `2000`). Without it, adds stop at the first error a full book returns. Names: letters, digits, `-`, `_`. Host: name or IP, optional `:port`, IPv6 in brackets. |
 | `RICOH_USER` | no | `admin` | Printer account with the user administrator role. |
 | `RICOH_PASSWORD` | yes* | | Used for every printer without its own override. *Optional if every printer has one. |
@@ -522,7 +549,9 @@ message) are filtered out. They never meant anything was wrong.
 and the examples repeat it so it's visible in the compose file. It fails if
 Tailscale is enabled but not Running, if no run has succeeded yet, or if the
 last successful run is older than 3 × `SYNC_INTERVAL_MINUTES`. A run succeeds
-when LDAP was read and every printer synced without an error. Docker and Coolify
+when LDAP was read, every printer synced without an error, and the safety
+brake didn't hold back any deletes. A braked run needs someone to look, so it
+counts as failed. Docker and Coolify
 report an unhealthy container but don't restart it. The container does exit,
 and get restarted, if `tailscaled` or the worker stops.
 
@@ -595,7 +624,8 @@ printers. Delete them in Web Image Monitor if you no longer want them.
 | `FAIL data volume` | `/data` isn't writable. Check the volume mount. |
 | `UDIRECTORY_PERMISSION_DENIED` | The printer account lacks the user administrator role, or the model blocks address book writes over SOAP. See [Tested printers](#tested-printers). |
 | `safety brake: N of M managed entries would be deleted` | More deletes than `MAX_DELETE_FRACTION` allows. If they're right, see [Approve deletes blocked by the safety brake](#operations). If not, check `LDAP_FILTER` and the directory's group membership. |
-| `safety brake: LDAP returned 0 users` | The filter or base matches nobody, or the directory was emptied. Nothing is deleted until users come back. |
+| `safety brake: LDAP returned 0 users` | The filter or base matches nobody, or the directory was emptied. Nothing is deleted until users come back. The line before it, `ldap: no usable users under ... matching ...`, shows the base and filter used. Entries need an email address and a name attribute to count. |
+| `ldap: skipping ...: mail 'null' is not an email address` | That directory account has no email address. It isn't added to the printer. |
 | `action=skip ... a manually created entry already has this email` | Someone added this person by hand. Delete that entry in Web Image Monitor if you want the sync to manage them. It's added on the next run. |
 | `run finished with errors` every run, container unhealthy | Look for the `ERROR` line above it: a printer that's off or unreachable, LDAP down, or a refused write. |
 | `renumber stopped: deleting failed` | The printer refused the delete. Nothing was re-added, and everyone keeps their entry. The next run tries again. |

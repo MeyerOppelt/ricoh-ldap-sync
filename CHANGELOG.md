@@ -4,6 +4,29 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.4.0 - 2026-10-29
+
+### Added
+
+- Company tag on the panel's button label. Set `LDAP_ATTR_COMPANY` to the
+  LDAP attribute holding each person's company, and optionally `COMPANY_TAGS`
+  for short tags (unlisted companies use their initials). The label becomes
+  `Alice A. (EH)`, and the Name field keeps the full name. A company change
+  updates the entry.
+- `examples/azuread-ldap-wrapper/ldap_customizer.js`: makes
+  AzureAD-LDAP-wrapper serve Entra's Company name as the `company` attribute.
+- The state file records the label written, so a label change is detected.
+  Records from earlier versions are read as having the plain name, so
+  upgrading without a company attribute changes nothing.
+
+### Fixed
+
+- Directory entries whose `mail` isn't an email address (for example the
+  literal `null` for an account with no mailbox) are skipped instead of added.
+- A run where the safety brake held back deletes now counts as failed, so the
+  healthcheck reports it. When LDAP returns 0 users, the log shows one line
+  with the base and filter used, instead of a line for every entry.
+
 ## 0.3.0 - 2026-10-29
 
 ### Changed

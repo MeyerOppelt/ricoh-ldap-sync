@@ -60,6 +60,8 @@ class Config:
     ldap_filter: str = DEFAULT_LDAP_FILTER
     ldap_attr_name: tuple[str, ...] = ("displayName", "cn", "uid")
     ldap_attr_mail: str = DEFAULT_ATTR_MAIL
+    ldap_attr_company: str = ""
+    company_tags: dict[str, str] = field(default_factory=dict)
     printers: tuple[Printer, ...] = ()
     ricoh_user: str = DEFAULT_RICOH_USER
     tailscale_enabled: bool = False
@@ -130,6 +132,8 @@ def load(env: Mapping[str, str] | None = None) -> Config:
     if not attr_name:
         problems.append("LDAP_ATTR_NAME must list at least one attribute")
     attr_mail = get("LDAP_ATTR_MAIL") or DEFAULT_ATTR_MAIL
+    attr_company = get("LDAP_ATTR_COMPANY")
+    company_tags = _company_tags(get("COMPANY_TAGS"), problems)
 
     printers = _printers(env, required("PRINTERS", ' (JSON, e.g. [{"name":"office","host":"192.0.2.10"}])'), problems)
 
@@ -165,6 +169,8 @@ def load(env: Mapping[str, str] | None = None) -> Config:
         ldap_filter=ldap_filter,
         ldap_attr_name=attr_name,
         ldap_attr_mail=attr_mail,
+        ldap_attr_company=attr_company,
+        company_tags=company_tags,
         printers=printers,
         ricoh_user=ricoh_user,
         tailscale_enabled=bool(get("TS_AUTHKEY")),
@@ -223,6 +229,27 @@ def _printers(env: Mapping[str, str], raw: str, problems: list[str]) -> tuple[Pr
             continue
         printers.append(Printer(name=name, host=host, password=password, capacity=capacity))
     return tuple(printers)
+
+
+COMPANY_TAG_MAX = 6
+
+
+def _company_tags(raw: str, problems: list[str]) -> dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        tags = json.loads(raw)
+    except json.JSONDecodeError as e:
+        problems.append(f"COMPANY_TAGS is not valid JSON ({e.msg} at position {e.pos})")
+        return {}
+    if not isinstance(tags, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in tags.items()):
+        problems.append('COMPANY_TAGS must be a JSON object of company name to tag, e.g. {"Example Holdings":"EH"}')
+        return {}
+    bad = [k for k, v in tags.items() if not 1 <= len(v.strip()) <= COMPANY_TAG_MAX]
+    if bad:
+        problems.append(f"COMPANY_TAGS: each tag must be 1 to {COMPANY_TAG_MAX} characters (check {', '.join(bad)})")
+        return {}
+    return {" ".join(k.split()): v.strip() for k, v in tags.items()}
 
 
 def _number(raw, default, kind, name, problems):

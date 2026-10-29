@@ -104,13 +104,38 @@ class Desired:
         return [("name", self.name), ("longName", self.key_display), ("tagId", self.tag_value())]
 
 
+def key_display(name: str, company_tag: str = "") -> str:
+    """The panel's button label: the name, plus " (TAG)" when there is a company tag.
+
+    Shortens the name to fit: the full name, else "First L.", else the first word.
+    """
+    name = " ".join(name.split())
+    if not company_tag:
+        return truncate(name, KEY_DISPLAY_MAX)
+    suffix = f" ({company_tag})"
+    room = KEY_DISPLAY_MAX - len(suffix)
+    words = name.split()
+    candidates = [name] + ([f"{words[0]} {words[-1][0]}."] if len(words) > 1 else [])
+    short = next((c for c in candidates if len(c) <= room), truncate(words[0] if words else "", room))
+    return short + suffix
+
+
+def written_key_display(rec: dict) -> str:
+    """The label the sync last wrote. Records from before 0.4.0 don't store it; they wrote the plain name."""
+    return rec.get("key_display", truncate(rec.get("name", ""), KEY_DISPLAY_MAX))
+
+
 def desired(user: User) -> Desired:
     return Desired(
         email=user.email,
         name=truncate(user.name, NAME_MAX),
-        key_display=truncate(user.name, KEY_DISPLAY_MAX),
+        key_display=key_display(user.name, user.tag),
         tag=title1_tag(user.name),
     )
+
+
+def record(entry_id: int | None, d: Desired, synced: bool = True) -> dict:
+    return {"id": entry_id, "name": d.name, "key_display": d.key_display, "synced_at": _now() if synced else None}
 
 
 # -- the plan --------------------------------------------------------------
@@ -188,7 +213,7 @@ def plan(printer: str, users: list[User], entries: list[Entry], records: Records
         d = desired(user)
         if user.email in valid:
             rec = valid[user.email]
-            if rec.get("name") != d.name:
+            if rec.get("name") != d.name or written_key_display(rec) != d.key_display:
                 p.updates.append((rec["id"], d, rec.get("name", "")))
             else:
                 p.unchanged.append(user.email)
@@ -199,6 +224,8 @@ def plan(printer: str, users: list[User], entries: list[Entry], records: Records
             if exact is not None and (not state_known or user.email in pending):
                 p.adoptions.append((exact.id, d))
                 owned.add(exact.id)
+                if exact.long_name != d.key_display:
+                    p.updates.append((exact.id, d, exact.name))
             else:
                 if user.email in pending:
                     p.forgotten.append((user.email, "unconfirmed add not found; another entry has this email"))
@@ -304,8 +331,10 @@ def log_plan(p: Plan, dry_run: bool) -> None:
         action(p.printer, "renumber", "*", result if dry_run else "will check after changes", entries=p.renumber)
     if p.brake_reason:
         log.error("printer=%s safety brake: %s; skipping all %d deletes", p.printer, p.brake_reason, len(p.braked))
+        # With an empty directory every entry would be listed; that's noise, not a review list.
+        level = logging.DEBUG if p.brake_reason.startswith("LDAP returned 0") else logging.ERROR
         for entry_id, email, name in p.braked:
-            action(p.printer, "delete", email, "blocked by safety brake", logging.ERROR, entry=entry_id, name=name)
+            action(p.printer, "delete", email, "blocked by safety brake", level, entry=entry_id, name=name)
     log.info("printer=%s plan: %d add, %d update, %d delete, %d adopt, %d unchanged, %d manual%s",
              p.printer, len(p.adds), len(p.updates), len(p.deletes), len(p.adoptions), len(p.unchanged),
              len(p.manual), " (dry run, nothing written)" if dry_run else "")
@@ -325,10 +354,12 @@ def sync_printer(client: RicohClient, printer: str, users: list[User], records: 
         log.info("printer=%s address book: %d entries", printer, count)
         p = plan(printer, users, entries, records, max_delete_fraction, capacity, count, keep_sorted)
         log_plan(p, dry_run)
+        # A braked run needs someone to look, so it counts as a failed run (and the healthcheck notices).
+        braked_ok = not p.brake_reason
         if dry_run:
-            return True
+            return braked_ok
         records = dict(records or {})
-        ok = _apply(client, p, records, set(ids), save)
+        ok = _apply(client, p, records, set(ids), save) and braked_ok
         if keep_sorted or force_renumber:
             ok &= _renumber(client, printer, records, {u.email: u for u in users}, save, force_renumber)
         return ok
@@ -352,7 +383,9 @@ def _apply(client: RicohClient, p: Plan, records: Records, before_ids: set[int],
     for email, _ in p.forgotten:
         records.pop(email, None)
     for entry_id, d in p.adoptions:
-        records[d.email] = {"id": entry_id, "name": d.name, "synced_at": _now()}
+        records[d.email] = record(entry_id, d)
+        if any(u[0] == entry_id for u in p.updates):
+            records[d.email]["key_display"] = None  # its label is updated below
         action(printer, "adopt", d.email, "ok", entry=entry_id, name=d.name)
     save(records)
 
@@ -374,14 +407,14 @@ def _apply(client: RicohClient, p: Plan, records: Records, before_ids: set[int],
             ok = False
             action(printer, "update", d.email, f"error: {e}", logging.ERROR, entry=entry_id)
             continue
-        records[d.email] = {"id": entry_id, "name": d.name, "synced_at": _now()}
+        records[d.email] = record(entry_id, d)
         save(records)
         action(printer, "update", d.email, "ok", entry=entry_id, name=d.name, was=old)
 
     sent: list[Desired] = []
     for d in p.adds:
         # Record the add before sending it, so a crash can't leave an entry we don't know we made.
-        records[d.email] = {"id": None, "name": d.name, "synced_at": None}
+        records[d.email] = record(None, d, synced=False)
         save(records)
         try:
             client.add_entry(d.add_props())
@@ -404,7 +437,7 @@ def _apply(client: RicohClient, p: Plan, records: Records, before_ids: set[int],
                 action(printer, "add", d.email, "sent, but the new entry was not found; the next run will check again",
                        logging.ERROR, name=d.name)
                 continue
-            records[d.email] = {"id": match.id, "name": d.name, "synced_at": _now()}
+            records[d.email] = record(match.id, d)
             action(printer, "add", d.email, "ok", entry=match.id, name=d.name)
         save(records)
 
@@ -429,7 +462,8 @@ def _renumber(client: RicohClient, printer: str, records: Records, users: dict[s
     entries = {e.id: e for e in client.get_entries(ids)}
     owned = [(email, rec, entries[rec["id"]]) for email, rec in records.items()
              if email in users and rec.get("id") in entries and entries[rec["id"]].email == email]
-    if any(rec["name"] != desired(users[email]).name for email, rec, _ in owned):
+    if any(rec["name"] != desired(users[email]).name or written_key_display(rec) != desired(users[email]).key_display
+           for email, rec, _ in owned):
         log.error("printer=%s renumber skipped: an earlier change in this run failed", printer)
         return False
     if not owned or (not force and in_order([(registration_number(e), sort_key(rec["name"], email))

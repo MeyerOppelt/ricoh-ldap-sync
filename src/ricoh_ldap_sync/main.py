@@ -52,6 +52,9 @@ def run_once(cfg: config.Config, state_path: str, force_renumber: bool = False) 
         log.error("ldap: %s; skipping this run for every printer", e)
         return False
     log.info("ldap: %d users", len(users))
+    if not users:
+        log.error("ldap: no usable users under %s matching %s (each needs %s and one of %s); nothing will be deleted",
+                  cfg.ldap_base, cfg.ldap_filter, cfg.ldap_attr_mail, ", ".join(cfg.ldap_attr_name))
 
     try:
         state = sync.load_state(state_path)

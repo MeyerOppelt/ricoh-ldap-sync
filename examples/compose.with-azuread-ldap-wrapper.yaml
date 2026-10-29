@@ -32,6 +32,8 @@ services:
     volumes:
       - ./ldap/data:/app/.cache
       - ./ldap/certs:/certs:ro
+      # Adds each user's Entra "Company name" as the LDAP attribute "company".
+      - ./azuread-ldap-wrapper/ldap_customizer.js:/app/customizer/ldap_customizer.js:ro
     healthcheck:
       # Healthy once the wrapper accepts TLS on its port. It only starts
       # listening after its Microsoft Graph check succeeds.
@@ -42,7 +44,7 @@ services:
       start_period: 120s
 
   ricoh-ldap-sync:
-    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.3.0
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.0
     restart: unless-stopped
     depends_on:
       ldap:
@@ -63,6 +65,9 @@ services:
       TS_HOSTNAME: ${SYNC_TS_HOSTNAME:-ricoh-ldap-sync}
       DRY_RUN: ${SYNC_DRY_RUN:-true}
       KEEP_SORTED: ${SYNC_KEEP_SORTED:-false}
+      # Company tag on the panel's button label; needs ldap_customizer.js above.
+      LDAP_ATTR_COMPANY: ${SYNC_LDAP_ATTR_COMPANY:-company}
+      COMPANY_TAGS: ${SYNC_COMPANY_TAGS:-}  # e.g. {"Example Holdings":"EH"}
       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
     volumes:
       - ./ricoh-ldap-sync/data:/data

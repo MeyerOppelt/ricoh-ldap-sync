@@ -7,6 +7,7 @@ never as "the directory is empty".
 from __future__ import annotations
 
 import logging
+import re
 import ssl
 from dataclasses import dataclass
 
@@ -25,10 +26,27 @@ class LdapError(Exception):
     pass
 
 
+# A plausible address shaped like user@example.com, with no spaces. Rejects
+# placeholders such as the literal "null" some directories return for no mail.
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 @dataclass(frozen=True)
 class User:
     email: str  # lowercased
     name: str
+    tag: str = ""  # short company tag for the panel's button label, "" for none
+
+
+def company_tag(company: str, tags: dict[str, str]) -> str:
+    """Short tag for a company: from COMPANY_TAGS (case-insensitive), else its initials."""
+    company = " ".join(company.split())
+    if not company:
+        return ""
+    for name, tag in tags.items():
+        if name.casefold() == company.casefold():
+            return tag
+    return "".join(word[0] for word in re.findall(r"[^\W_]+", company)).upper()[:4]
 
 
 def make_server(cfg: Config) -> Server:
@@ -75,7 +93,7 @@ def connect(cfg: Config) -> Connection:
 
 def search(conn: Connection, cfg: Config) -> list[dict[str, list[str]]]:
     """Run the configured search and return each entry's attributes as lists of strings."""
-    attributes = sorted({*cfg.ldap_attr_name, cfg.ldap_attr_mail})
+    attributes = sorted({*cfg.ldap_attr_name, cfg.ldap_attr_mail} | ({cfg.ldap_attr_company} if cfg.ldap_attr_company else set()))
     try:
         ok = conn.search(cfg.ldap_base, cfg.ldap_filter, attributes=attributes)
     except LDAPException as e:
@@ -104,13 +122,20 @@ def to_users(entries: list[dict[str, list[str]]], cfg: Config) -> list[User]:
         mails = lower.get(cfg.ldap_attr_mail.lower()) or []
         email = mails[0].strip().lower() if mails else ""
         name = next((v[0].strip() for a in cfg.ldap_attr_name if (v := lower.get(a.lower())) and v[0].strip()), "")
+        if email and not _EMAIL.match(email):
+            log.warning("ldap: skipping %s: mail %r is not an email address", name or "entry", email)
+            continue
         if not email or not name:
             log.warning("ldap: skipping entry without %s", "mail" if not email else "a name attribute")
             continue
         if email in by_email:
             log.warning("ldap: duplicate email %s, keeping the first entry", email)
             continue
-        by_email[email] = User(email=email, name=name)
+        tag = ""
+        if cfg.ldap_attr_company:
+            companies = lower.get(cfg.ldap_attr_company.lower()) or []
+            tag = company_tag(companies[0] if companies else "", cfg.company_tags)
+        by_email[email] = User(email=email, name=name, tag=tag)
     return sorted(by_email.values(), key=lambda u: u.email)
 
 
