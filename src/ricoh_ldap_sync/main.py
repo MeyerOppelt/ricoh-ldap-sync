@@ -1,14 +1,23 @@
-"""Worker: run a sync at start, then every SYNC_INTERVAL_MINUTES."""
+"""Worker: run a sync at start, then every SYNC_INTERVAL_MINUTES.
+
+    python -m ricoh_ldap_sync              # the container's worker loop
+    python -m ricoh_ldap_sync --once       # one sync now, then exit
+    python -m ricoh_ldap_sync --once --dry-run   # preview one sync, write nothing
+"""
 
 from __future__ import annotations
 
+import argparse
+import dataclasses
+import fcntl
 import logging
 import os
 import signal
 import sys
 import time
+from contextlib import contextmanager
 
-from . import check, config, ldap_source, sync
+from . import __version__, check, config, ldap_source, sync
 from .ricoh_soap import RicohClient, RicohError
 
 log = logging.getLogger("ricoh_ldap_sync")
@@ -16,9 +25,25 @@ log = logging.getLogger("ricoh_ldap_sync")
 DATA_DIR = "/data"
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
 LAST_SUCCESS = os.path.join(DATA_DIR, "last_success")
+LOCK_FILE = os.path.join(DATA_DIR, ".sync.lock")
 
 
-def run_once(cfg: config.Config, state_path: str = STATE_FILE) -> bool:
+@contextmanager
+def run_lock(path: str = LOCK_FILE):
+    """Only one sync at a time, so a manual --once run can't overlap the worker."""
+    with open(path, "a") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log.info("another sync is running; waiting for it to finish")
+            fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def run_once(cfg: config.Config, state_path: str) -> bool:
     """One sync of every printer. Returns True if LDAP and every printer succeeded."""
     try:
         users = ldap_source.fetch_users(cfg)
@@ -67,30 +92,48 @@ def _stop(signum, frame):
     raise SystemExit(0)
 
 
-def main() -> int:
+def sync_now(cfg: config.Config) -> bool:
+    with run_lock(LOCK_FILE):
+        ok = run_once(cfg, STATE_FILE)
+    if ok:
+        log.info("run complete")
+    else:
+        log.error("run finished with errors")
+    return ok
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m ricoh_ldap_sync", description=__doc__.splitlines()[0])
+    parser.add_argument("--once", action="store_true", help="run one sync now and exit (0 if it succeeded)")
+    parser.add_argument("--dry-run", action="store_true", help="log the plan without writing, whatever DRY_RUN says")
+    parser.add_argument("--version", action="version", version=f"ricoh-ldap-sync {__version__}")
+    args = parser.parse_args(argv)
     try:
         cfg = config.load()
     except config.ConfigError as e:
         print(e, file=sys.stderr)
         return 2
+    if args.dry_run:
+        cfg = dataclasses.replace(cfg, dry_run=True)
     logging.basicConfig(level=cfg.log_level.upper(), format="%(asctime)s %(levelname)s %(message)s",
                         datefmt="%Y-%m-%dT%H:%M:%SZ", stream=sys.stdout)
     logging.Formatter.converter = time.gmtime
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     signal.signal(signal.SIGTERM, _stop)
 
-    log.info("starting: %d printer(s), every %d min, %s", len(cfg.printers), cfg.sync_interval_minutes,
-             "DRY RUN (nothing is written)" if cfg.dry_run else "LIVE")
-    check.main(["--wait", "120"])
+    mode = "DRY RUN (nothing is written)" if cfg.dry_run else "LIVE"
+    if args.once:
+        log.info("ricoh-ldap-sync %s: one run, %d printer(s), %s", __version__, len(cfg.printers), mode)
+        return 0 if sync_now(cfg) else 1
 
+    log.info("ricoh-ldap-sync %s starting: %d printer(s), every %d min, %s", __version__, len(cfg.printers),
+             cfg.sync_interval_minutes, mode)
+    check.main(["--wait", "120"])
     while True:
         started = time.monotonic()
-        if run_once(cfg):
+        if sync_now(cfg):
             with open(LAST_SUCCESS, "w") as f:
                 f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n")
-            log.info("run complete")
-        else:
-            log.error("run finished with errors")
         time.sleep(max(cfg.sync_interval_minutes * 60 - (time.monotonic() - started), 0))
 
 

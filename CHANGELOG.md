@@ -4,6 +4,26 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.1.0 - 2026-10-29
+
+First release.
+
+### Added
+
+- `python -m ricoh_ldap_sync --once` runs one sync now and exits with 0 on
+  success. `--dry-run` previews a run without writing, whatever `DRY_RUN` says.
+  `--version` prints the version.
+- A lock in `/data` so a manual run and the scheduled worker never overlap.
+- The version is logged at startup.
+- `docs/protocol.md`: reference for the address book SOAP calls and properties.
+- `CONTRIBUTING.md` and issue templates for bugs and printer compatibility
+  reports.
+
+### Fixed
+
+- An unconfirmed add whose email now belongs to a different entry is dropped
+  from the state file, instead of being kept indefinitely.
+
 ## 0.0.3 - 2026-10-29
 
 Pre-release. The full sync, tested against a simulated printer. Confirm writes

@@ -1,5 +1,9 @@
 # ricoh-ldap-sync
 
+[![test](https://github.com/MeyerOppelt/ricoh-ldap-sync/actions/workflows/test.yml/badge.svg)](https://github.com/MeyerOppelt/ricoh-ldap-sync/actions/workflows/test.yml)
+[![build](https://github.com/MeyerOppelt/ricoh-ldap-sync/actions/workflows/build.yml/badge.svg)](https://github.com/MeyerOppelt/ricoh-ldap-sync/actions/workflows/build.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Keeps the local address book on Ricoh multifunction printers in sync with the
 users in an LDAP directory.
 
@@ -22,11 +26,9 @@ an embedded Tailscale client (also works with a self-hosted Headscale server).
 So it can run in the cloud next to your directory and still reach a printer in
 an office, without a VPN on the host or any inbound firewall rules.
 
-> **Status: pre-release.** `0.0.3` contains the full sync, the connectivity
-> check and a protocol probe. The sync has been tested against a simulated
-> printer. Run the [probe](#7-prove-the-printer-accepts-writes) on your printer,
-> and review a dry run, before setting `DRY_RUN=false`. `0.1.0` will follow once
-> writes are confirmed on a real printer.
+**Quick start:** follow [Setup, step by step](#setup-step-by-step). In short:
+deploy with `DRY_RUN=true` (the default), check the plan in the logs, run the
+[probe](#7-prove-the-printer-accepts-writes) once, then set `DRY_RUN=false`.
 
 ## Contents
 
@@ -40,6 +42,7 @@ an office, without a VPN on the host or any inbound firewall rules.
 - [Security](#security)
 - [Tested printers](#tested-printers)
 - [Development](#development)
+- [Protocol reference](docs/protocol.md)
 
 ## How it works
 
@@ -277,7 +280,7 @@ docker compose logs -f ricoh-ldap-sync
 ```
 
 Always reference an exact image version, e.g.
-`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.0.3`, never `latest`. That way an
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.1.0`, never `latest`. That way an
 upgrade happens only when you change the tag.
 
 #### Coolify
@@ -413,12 +416,25 @@ WARNING printer=office action=skip email=dave@example.com entry=3 result=a manua
 INFO printer=office plan: 1 add, 1 update, 1 delete, 0 adopt, 20 unchanged, 1 manual (dry run, nothing written)
 ```
 
-Check that the adds are the people you expect. When the plan looks right, set
-`DRY_RUN=false` and redeploy. Then:
+Check that the adds are the people you expect. You can also preview a run at
+any time, even when live, without writing anything:
 
-1. Check the new entries on the printer's panel.
-2. Wait for the next run. It should report no changes.
-3. Remove a test user from the directory. Their entry should go on the run after.
+```bash
+docker exec <container> python -m ricoh_ldap_sync --once --dry-run
+```
+
+**Going live:**
+
+1. The probe's write test passed (step 7).
+2. The dry-run plan adds the people you expect, and the `skip` warnings are
+   hand-made entries you want to keep.
+3. Set `DRY_RUN=false` and redeploy. The first live run deletes nothing: there
+   is no ownership state yet, so it only adds, and adopts exact matches.
+4. Check the new entries on the printer's panel.
+5. Run `docker exec <container> python -m ricoh_ldap_sync --once`, or wait for
+   the next run. It should log `0 add, 0 update, 0 delete`.
+6. Remove a test user from the directory, wait for the LDAP server to pick up
+   the change, and run once more. Their entry should be deleted.
 
 ## Configuration reference
 
@@ -466,8 +482,33 @@ when LDAP was read and every printer synced without an error. Docker and Coolify
 report an unhealthy container but don't restart it. The container does exit,
 and get restarted, if `tailscaled` or the worker stops.
 
+**Run a sync now.** The worker runs every `SYNC_INTERVAL_MINUTES`. To run one
+immediately, for example after changing the directory:
+
+```bash
+docker exec <container> python -m ricoh_ldap_sync --once            # follows DRY_RUN
+docker exec <container> python -m ricoh_ldap_sync --once --dry-run  # never writes
+```
+
+The exit code is 0 if LDAP and every printer succeeded. A lock in `/data`
+makes a manual run wait for a scheduled run in progress, and the other way
+round, so two runs never overlap.
+
+**Approve deletes blocked by the safety brake.** The brake blocks the same
+deletes on every run until someone looks. If they are legitimate (for example,
+several people left at once, or a small directory where one leaver is more than
+`MAX_DELETE_FRACTION`), check the `blocked by safety brake` lines in the log,
+then run once with a higher limit:
+
+```bash
+docker exec <container> env MAX_DELETE_FRACTION=1 python -m ricoh_ldap_sync --once
+```
+
+This applies to that one run only. The brake for 0 LDAP users can't be
+overridden.
+
 **Upgrade.** Read the [changelog](CHANGELOG.md), change the image tag, and
-redeploy.
+redeploy. `python -m ricoh_ldap_sync --version` shows the running version.
 
 **Add a printer.**
 1. Add it to `PRINTERS`, and set `RICOH_PASSWORD_<NAME>` if its password differs.
@@ -509,6 +550,10 @@ printers. Delete them in Web Image Monitor if you no longer want them.
 | `ldap search: 0 entries` | Wrong `LDAP_BASE` or `LDAP_FILTER`, or the bind account can't read users. |
 | `FAIL data volume` | `/data` isn't writable. Check the volume mount. |
 | `UDIRECTORY_PERMISSION_DENIED` | The printer account lacks the user administrator role, or the model blocks address book writes over SOAP. See [Tested printers](#tested-printers). |
+| `safety brake: N of M managed entries would be deleted` | More deletes than `MAX_DELETE_FRACTION` allows. If they're right, see [Approve deletes blocked by the safety brake](#operations). If not, check `LDAP_FILTER` and the directory's group membership. |
+| `safety brake: LDAP returned 0 users` | The filter or base matches nobody, or the directory was emptied. Nothing is deleted until users come back. |
+| `action=skip ... a manually created entry already has this email` | Someone added this person by hand. Delete that entry in Web Image Monitor if you want the sync to manage them. It's added on the next run. |
+| `run finished with errors` every run, container unhealthy | Look for the `ERROR` line above it: a printer that's off or unreachable, LDAP down, or a refused write. |
 | Address book locked on the panel | An address book session was left open. It ends when its time limit runs out. Restarting the printer also clears it. |
 
 ## Security
@@ -530,7 +575,7 @@ The container holds each printer's admin password, the LDAP bind password, and
 
 | Model | Firmware | Result |
 | --- | --- | --- |
-| Ricoh IM C2510 | as found | Connectivity verified. Address book read/write testing in progress. |
+| Ricoh IM C2510 | as found | Connectivity and Web Image Monitor verified. Address book reads and writes not yet confirmed: run the probe. |
 
 **Known risk:** some newer Ricoh models reject address book writes over SOAP
 (`putObjects`) with `UDIRECTORY_PERMISSION_DENIED`, while deletes still work.
@@ -547,9 +592,25 @@ pytest
 docker build -t ricoh-ldap-sync:dev .
 ```
 
-Tests need no network, printer or LDAP server. Committed SOAP fixtures are
-synthetic, with made-up names and `@example.com` addresses. Recordings from
-real devices go in `recordings/`, which git ignores.
+Tests need no network, printer or LDAP server. `tests/fakeprinter.py` is an
+in-memory address book that answers the same SOAP calls as a printer, with
+made-up names and `@example.com` addresses. Recordings from real devices go in
+`recordings/`, which git ignores. See [CONTRIBUTING.md](CONTRIBUTING.md) and
+the [protocol reference](docs/protocol.md).
+
+Layout:
+
+| Path | Purpose |
+| --- | --- |
+| `src/ricoh_ldap_sync/config.py` | Environment parsing and validation |
+| `src/ricoh_ldap_sync/ldap_source.py` | LDAP users, with certificate name override |
+| `src/ricoh_ldap_sync/ricoh_soap.py` | Address book SOAP client |
+| `src/ricoh_ldap_sync/sync.py` | Plan (diff, safety brake, ownership), state file, applying changes |
+| `src/ricoh_ldap_sync/main.py` | Worker loop, `--once`, `--dry-run`, run lock |
+| `src/ricoh_ldap_sync/check.py` | Connectivity check |
+| `src/ricoh_ldap_sync/probe.py` | Protocol probe |
+| `src/ricoh_ldap_sync/health.py` | Container healthcheck |
+| `entrypoint.sh` | Volume ownership, Tailscale startup, process supervision |
 
 **Releases.** Pushing a `vX.Y.Z` tag runs the tests, then builds
 `linux/amd64` and `linux/arm64` images and pushes them to

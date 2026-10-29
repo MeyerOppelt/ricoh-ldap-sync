@@ -31,6 +31,11 @@ def printers(monkeypatch):
     return fakes
 
 
+def paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(main, "LOCK_FILE", str(tmp_path / ".sync.lock"))
+
+
 def users(monkeypatch, result):
     def fetch(cfg):
         if isinstance(result, Exception):
@@ -85,3 +90,34 @@ def test_corrupt_state_skips_run(monkeypatch, printers, tmp_path):
     assert main.run_once(config.load(ENV), str(path)) is False
     assert all(p.calls == [] for p in printers.values())
     assert path.read_text() == "{oops"
+
+
+def test_run_lock_serialises(tmp_path):
+    import fcntl
+    lock = str(tmp_path / ".sync.lock")
+    with main.run_lock(lock):
+        with open(lock, "a") as f:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with open(lock, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_once_dry_run_flag_overrides_env(monkeypatch, printers, tmp_path):
+    users(monkeypatch, USERS)
+    paths(monkeypatch, tmp_path)
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    assert main.main(["--once", "--dry-run"]) == 0
+    assert all("putObjects" not in p.calls for p in printers.values())
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_once_live(monkeypatch, printers, tmp_path):
+    users(monkeypatch, USERS)
+    paths(monkeypatch, tmp_path)
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    assert main.main(["--once"]) == 0
+    assert (tmp_path / "state.json").exists()
+    assert any("putObjects" in p.calls for p in printers.values())

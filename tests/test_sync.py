@@ -125,6 +125,14 @@ def test_pending_add_is_adopted_or_retried():
     assert [d.email for d in lost.adds] == ["alice@example.com"]
 
 
+def test_pending_add_with_other_entry_is_dropped():
+    pending = {"alice@example.com": {"id": None, "name": "Alice Anders", "synced_at": None}}
+    p = sync.plan("office", [ALICE], [entry(4, "Someone Else", "alice@example.com")], pending, 1.0)
+    assert p.manual == [("alice@example.com", 4)]
+    assert [e for e, _ in p.forgotten] == ["alice@example.com"]
+    assert p.adds == [] and p.adoptions == []
+
+
 def test_capacity_limits_adds():
     users = [User(f"u{i}@example.com", f"User {i}") for i in range(5)]
     p = sync.plan("office", users, [], {}, 1.0, capacity=10, count=8)

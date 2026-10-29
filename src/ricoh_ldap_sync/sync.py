@@ -159,6 +159,8 @@ def plan(printer: str, users: list[User], entries: list[Entry], records: Records
                 p.adoptions.append((exact.id, d))
                 owned.add(exact.id)
             else:
+                if user.email in pending:
+                    p.forgotten.append((user.email, "unconfirmed add not found; another entry has this email"))
                 p.manual.append((user.email, others[0].id))
             continue
         p.adds.append(d)

@@ -1,0 +1,35 @@
+name: Printer compatibility report
+description: Report how a Ricoh model behaves with the sync
+labels: [printer-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing another model. The probe output masks names and replaces email addresses; check it before pasting.
+  - type: input
+    id: model
+    attributes:
+      label: Printer model
+      placeholder: "IM C3000"
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Read and write work
+        - Read works, writes refused (UDIRECTORY_PERMISSION_DENIED)
+        - Read fails
+        - Other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: probe
+    attributes:
+      label: Output of `python -m ricoh_ldap_sync.probe --write-test`
+      render: text

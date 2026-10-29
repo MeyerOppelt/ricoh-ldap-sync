@@ -1,6 +1,6 @@
 [project]
 name = "ricoh-ldap-sync"
-version = "0.0.3"
+version = "0.1.0"
 description = "Keep Ricoh printer address books in sync with an LDAP directory"
 requires-python = ">=3.15"
 license = "MIT"
