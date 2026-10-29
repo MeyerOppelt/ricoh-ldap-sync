@@ -53,15 +53,18 @@ def guest_address(upn: str) -> str:
     return address if _EMAIL.match(address) else ""
 
 
+COMPANY_TAG_DEFAULT_LEN = 4
+
+
 def company_tag(company: str, tags: dict[str, str]) -> str:
-    """Short tag for a company: from COMPANY_TAGS (case-insensitive), else its initials."""
+    """Short tag for a company: from COMPANY_TAGS (case-insensitive), else its first 4 characters."""
     company = " ".join(company.split())
     if not company:
         return ""
     for name, tag in tags.items():
         if name.casefold() == company.casefold():
             return tag
-    return "".join(word[0] for word in re.findall(r"[^\W_]+", company)).upper()[:4]
+    return company[:COMPANY_TAG_DEFAULT_LEN].rstrip()
 
 
 def make_server(cfg: Config) -> Server:

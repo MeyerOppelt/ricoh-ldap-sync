@@ -52,9 +52,13 @@ def test_bad_company_tags(raw, fragment):
 @pytest.mark.parametrize("company, tag", [
     ("Example Holdings", "EH"),            # mapped
     ("example holdings", "EH"),            # case-insensitive
-    ("Northwind Traders Inc", "NTI"),      # initials when unmapped
-    ("Contoso", "C"),
-    ("A B C D E F", "ABCD"),               # at most 4 initials
+    ("Northwind Traders Inc", "Nort"),     # first 4 characters when unmapped
+    ("Contoso", "Cont"),
+    ("ACME", "ACME"),
+    ("Oak", "Oak"),                        # shorter than 4
+    ("VC Interiors", "VC I"),
+    ("Ab  Cd", "Ab C"),                    # runs of spaces collapse first
+    ("Ab Cdef", "Ab C"),
     ("", ""),
     ("   ", ""),
 ])
@@ -93,7 +97,7 @@ def test_search_requests_company_attribute():
     conn.bind()
     c = cfg(LDAP_ATTR_COMPANY="company")
     users = ldap_source.to_users(ldap_source.search(conn, c), c)
-    assert [(u.email, u.tag) for u in users] == [("alice@example.com", "EH")]
+    assert [(u.email, u.tag) for u in users] == [("alice@example.com", "Exam")]
 
 
 # -- the button label ----------------------------------------------------------
@@ -107,6 +111,8 @@ def test_search_requests_company_attribute():
     ("Accounting Veldhouse", "VC", "Accounting (VC)"),      # "Accounting V." doesn't fit either
     ("Blacktie", "VC", "Blacktie (VC)"),
     ("Maximiliano Fitzgerald-Montgomery", "NTI", "Maximilian (NTI)"),
+    ("Alice Anders", "Veld", "Alice A. (Veld)"),
+    ("Carley Goetschius", "Veld", "Carley G. (Veld)"),
 ])
 def test_key_display(name, tag, label):
     out = sync.key_display(name, tag)

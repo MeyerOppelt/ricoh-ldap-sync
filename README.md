@@ -154,8 +154,9 @@ To include guests at all with AzureAD-LDAP-wrapper:
 ### Showing each person's company
 
 The address book has no company field, but the panel's button label (the
-*key display*, 16 characters) can carry a short company tag, such as
-`Alice A. (EH)`. The Name field keeps the full name.
+*key display*, 16 characters) can carry a short company tag: by default the
+first 4 characters of the company name, as in `Alice A. (Exam)` for
+"Example Holdings". The Name field keeps the full name.
 
 1. **Get the company into LDAP.** The sync reads it from an LDAP attribute
    named by `LDAP_ATTR_COMPANY`. With
@@ -177,10 +178,12 @@ The address book has no company field, but the panel's button label (the
    The wrapper's own entrypoint then runs as usual. With `LDAP_DEBUG=true`, its
    log shows `ldap_customizer loaded`. Re-encode the file whenever it changes.
 2. **Turn it on in the sync:** set `LDAP_ATTR_COMPANY=company`.
-3. **Choose short tags (optional):** for example
+3. **Override tags (optional):** each company's tag is the first 4
+   characters of its name ("VC Interiors" gives `VC I`). To choose a different
+   tag for some companies, set for example
    `COMPANY_TAGS={"Example Holdings":"EH","Northwind Traders":"NT"}`. Names
-   match ignoring case. A company that isn't listed gets its initials, up to 4
-   letters. People with no company get no tag.
+   match ignoring case, and any company not listed keeps its first 4
+   characters. People with no company get no tag.
 
 The label is the full name if it fits next to the tag, otherwise "First L.",
 otherwise the first name cut to fit. Turning this on, or changing a
@@ -377,7 +380,7 @@ docker compose logs -f ricoh-ldap-sync
 ```
 
 Always reference an exact image version, e.g.
-`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.1`, never `latest`. That way an
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.2`, never `latest`. That way an
 upgrade happens only when you change the tag.
 
 #### Coolify
@@ -546,7 +549,7 @@ docker exec <container> python -m ricoh_ldap_sync --once --dry-run
 | `LDAP_ATTR_NAME` | no | `displayName,cn,uid` | Name attributes, tried in order. |
 | `LDAP_ATTR_MAIL` | no | `mail` | Email attribute. Values that aren't email addresses (for example `null`) are skipped. |
 | `LDAP_ATTR_COMPANY` | no | | Attribute holding each person's company. When set, the button label gets a company tag. See [Showing each person's company](#showing-each-persons-company). |
-| `COMPANY_TAGS` | no | | JSON object of company name to tag (1–6 characters), e.g. `{"Example Holdings":"EH"}`. Unlisted companies use their initials. |
+| `COMPANY_TAGS` | no | | Optional overrides: JSON object of company name to tag (1–6 characters), e.g. `{"Example Holdings":"EH"}`. Without an override, a company's tag is the first 4 characters of its name. |
 | `PRINTERS` | yes | | JSON list of `{"name","host"}`, plus an optional `"capacity"` (the most entries the address book holds, for example `2000`). Without it, adds stop at the first error a full book returns. Names: letters, digits, `-`, `_`. Host: name or IP, optional `:port`, IPv6 in brackets. |
 | `RICOH_USER` | no | `admin` | Printer account with the user administrator role. |
 | `RICOH_PASSWORD` | yes* | | Used for every printer without its own override. *Optional if every printer has one. |

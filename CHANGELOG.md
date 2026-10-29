@@ -4,6 +4,15 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.4.2 - 2026-10-29
+
+### Changed
+
+- A company without a `COMPANY_TAGS` entry is tagged with the first 4
+  characters of its name (for example `Exam` for "Example Holdings") instead of
+  its initials. `COMPANY_TAGS` is only needed for overrides. If you relied on
+  initials, the affected labels are updated on the next run.
+
 ## 0.4.1 - 2026-10-29
 
 ### Fixed
