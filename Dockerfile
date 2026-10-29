@@ -34,4 +34,4 @@ HEALTHCHECK --interval=60s --timeout=15s --start-period=180s --retries=3 \
 # The entrypoint starts as root only to fix volume ownership, then drops to
 # UID 1000 before starting tailscaled and the worker.
 ENTRYPOINT ["tini", "-g", "--", "/usr/local/bin/entrypoint.sh"]
-CMD ["sh", "-c", "python -m ricoh_ldap_sync.check --wait 120; exec sleep infinity"]
+CMD ["python", "-m", "ricoh_ldap_sync"]

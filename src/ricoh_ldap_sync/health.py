@@ -21,15 +21,17 @@ def main() -> int:
         if state != "Running":
             print(f"tailscale state {state}")
             return 1
-    if os.path.exists(LAST_SUCCESS):
-        try:
-            interval = int(os.environ.get("SYNC_INTERVAL_MINUTES") or config.DEFAULT_INTERVAL_MINUTES)
-        except ValueError:
-            interval = config.DEFAULT_INTERVAL_MINUTES
-        age = time.time() - os.path.getmtime(LAST_SUCCESS)
-        if age > 3 * interval * 60:
-            print(f"last successful sync was {int(age // 60)} minutes ago")
-            return 1
+    if not os.path.exists(LAST_SUCCESS):
+        print("no successful sync yet")
+        return 1
+    try:
+        interval = int(os.environ.get("SYNC_INTERVAL_MINUTES") or config.DEFAULT_INTERVAL_MINUTES)
+    except ValueError:
+        interval = config.DEFAULT_INTERVAL_MINUTES
+    age = time.time() - os.path.getmtime(LAST_SUCCESS)
+    if age > 3 * interval * 60:
+        print(f"last successful sync was {int(age // 60)} minutes ago")
+        return 1
     return 0
 
 

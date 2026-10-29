@@ -4,6 +4,31 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.0.3 - 2026-10-29
+
+Pre-release. The full sync, tested against a simulated printer. Confirm writes
+on your printer with the probe before setting `DRY_RUN=false`.
+
+### Added
+
+- Address book sync: adds users missing from the printer, updates entries whose
+  display name changed, and deletes entries for users no longer in LDAP. It
+  only touches entries it created, which it records in `/data/state.json`.
+- Safety brake: no deletes when LDAP returns 0 users, or when deletes would
+  remove more than `MAX_DELETE_FRACTION` of a printer's managed entries.
+- Adoption of existing entries that exactly match, when there is no state.
+  Hand-made entries with a user's email are left alone, with a warning.
+- Dry run (the default) logs the plan and writes nothing, not even state.
+- Optional per-printer `capacity` in `PRINTERS`. Adds stop when it's reached.
+- `python -m ricoh_ldap_sync.probe [--write-test]`: proves the address book
+  service works on a printer, with names and emails scrubbed from the output.
+- The container now runs the worker. It runs the connectivity check at start,
+  then syncs every `SYNC_INTERVAL_MINUTES`.
+
+### Changed
+
+- The healthcheck now also fails until the first successful run.
+
 ## 0.0.2 - 2026-10-28
 
 Pre-release for connectivity testing. No address book sync yet.

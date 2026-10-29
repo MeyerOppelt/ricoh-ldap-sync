@@ -43,6 +43,7 @@ class Printer:
     name: str
     host: str
     password: str = field(repr=False)
+    capacity: int | None = None
 
     @property
     def base_url(self) -> str:
@@ -204,6 +205,10 @@ def _printers(env: Mapping[str, str], raw: str, problems: list[str]) -> tuple[Pr
         if host.count(":") > 1 and not host.startswith("["):
             problems.append(f"PRINTERS[{i}].host: put an IPv6 address in brackets, e.g. [2001:db8::10]")
             continue
+        capacity = item.get("capacity")
+        if capacity is not None and (not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1):
+            problems.append(f"PRINTERS[{i}].capacity must be a positive whole number")
+            continue
         var = password_var(name)
         if var in seen:
             problems.append(f"PRINTERS has more than one printer named {name!r} (names must be unique ignoring case and -/_)")
@@ -213,7 +218,7 @@ def _printers(env: Mapping[str, str], raw: str, problems: list[str]) -> tuple[Pr
         if not password:
             problems.append(f"RICOH_PASSWORD (or {var}) is required for printer {name!r}")
             continue
-        printers.append(Printer(name=name, host=host, password=password))
+        printers.append(Printer(name=name, host=host, password=password, capacity=capacity))
     return tuple(printers)
 
 

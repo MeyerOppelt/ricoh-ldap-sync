@@ -22,9 +22,11 @@ an embedded Tailscale client (also works with a self-hosted Headscale server).
 So it can run in the cloud next to your directory and still reach a printer in
 an office, without a VPN on the host or any inbound firewall rules.
 
-> **Status: pre-release.** `0.0.x` images contain the connectivity check only
-> (`python -m ricoh_ldap_sync.check`). Address book sync arrives in `0.1.0`.
-> Sections marked *(0.1.0)* describe how the sync is designed to work.
+> **Status: pre-release.** `0.0.3` contains the full sync, the connectivity
+> check and a protocol probe. The sync has been tested against a simulated
+> printer. Run the [probe](#7-prove-the-printer-accepts-writes) on your printer,
+> and review a dry run, before setting `DRY_RUN=false`. `0.1.0` will follow once
+> writes are confirmed on a real printer.
 
 ## Contents
 
@@ -67,7 +69,7 @@ an office, without a VPN on the host or any inbound firewall rules.
   (`/DH/udirectory`), the interface Ricoh's own management tools use. The web
   UI is never scraped.
 
-Each run *(0.1.0)*:
+Each run:
 
 1. Reads users from LDAP: `LDAP_BASE`, `LDAP_FILTER`. The display name is the
    first of `LDAP_ATTR_NAME` that has a value. Emails are compared lowercased.
@@ -275,7 +277,7 @@ docker compose logs -f ricoh-ldap-sync
 ```
 
 Always reference an exact image version, e.g.
-`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.0.2`, never `latest`. That way an
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.0.3`, never `latest`. That way an
 upgrade happens only when you change the tag.
 
 #### Coolify
@@ -367,14 +369,48 @@ docker exec <container> tailscale status
 docker exec <container> curl -sI -x http://localhost:1055 http://192.0.2.10/
 ```
 
-### 7. Review the dry run, then go live *(0.1.0)*
+### 7. Prove the printer accepts writes
 
-With `DRY_RUN=true`, each run logs one line per planned change:
+Some Ricoh models refuse address book writes over SOAP, so check yours before
+going live. The probe is read-only unless you pass `--write-test`:
+
+```bash
+docker exec <container> python -m ricoh_ldap_sync.probe               # read only
+docker exec <container> python -m ricoh_ldap_sync.probe --write-test  # add, rename, delete a test entry
+```
+
+The read-only run:
+1. Opens a shared session.
+2. Lists the address book.
+3. Prints every property of the first two entries.
+4. Summarises the name lengths and index tags in use.
+
+`--write-test` then:
+1. Adds `ZZ Sync Test` with `sync-test@invalid.example`.
+2. Reads it back.
+3. Renames it with a 48-character name, to show what the printer stores. That
+   tells you the real length limits.
+4. Deletes it, and checks that it's gone.
+
+It never touches any other entry. If a previous test was interrupted, it first
+removes leftover entries that have both that name prefix and that address.
+Output masks names (`Axxxx Axxxxx`, same length) and replaces email addresses.
+Add `--printer NAME` to pick a printer, and `--save DIR` to keep the scrubbed raw
+responses.
+
+If `add` fails with `UDIRECTORY_PERMISSION_DENIED`, see
+[Tested printers](#tested-printers).
+
+### 8. Review the dry run, then go live
+
+With `DRY_RUN=true`, each run logs one line per planned change, then a summary:
 
 ```
-plan printer=office action=add email=alice@example.com name="Alice Example"
-plan printer=office action=update email=bob@example.com name="Robert Example" (was "Bob Example")
-plan printer=office action=delete email=carol@example.com
+INFO printer=office action=add email=alice@example.com name="Alice Example" key_display="Alice Example" result=planned
+INFO printer=office action=update email=bob@example.com entry=12 name="Robert Example" was="Bob Example" result=planned
+INFO printer=office action=delete email=carol@example.com entry=7 name="Carol Example" result=planned
+WARNING printer=office action=skip email=dave@example.com entry=3 result=a manually created entry already has this email; leaving it alone
+INFO printer=office plan: 1 add, 1 update, 1 delete, 0 adopt, 20 unchanged, 1 manual (dry run, nothing written)
 ```
 
 Check that the adds are the people you expect. When the plan looks right, set
@@ -396,7 +432,7 @@ Check that the adds are the people you expect. When the plan looks right, set
 | `LDAP_FILTER` | no | `(&(uid=*)(mail=*))` | Which entries are users. |
 | `LDAP_ATTR_NAME` | no | `displayName,cn,uid` | Name attributes, tried in order. |
 | `LDAP_ATTR_MAIL` | no | `mail` | Email attribute. |
-| `PRINTERS` | yes | | JSON list of `{"name","host"}`. Names: letters, digits, `-`, `_`. Host: name or IP, optional `:port`, IPv6 in brackets. |
+| `PRINTERS` | yes | | JSON list of `{"name","host"}`, plus an optional `"capacity"` (the most entries the address book holds, for example `2000`). Without it, adds stop at the first error a full book returns. Names: letters, digits, `-`, `_`. Host: name or IP, optional `:port`, IPv6 in brackets. |
 | `RICOH_USER` | no | `admin` | Printer account with the user administrator role. |
 | `RICOH_PASSWORD` | yes* | | Used for every printer without its own override. *Optional if every printer has one. |
 | `RICOH_PASSWORD_<NAME>` | no | | Per-printer password. `<NAME>` is the printer name uppercased, with `-` replaced by `_` (`office-2` → `RICOH_PASSWORD_OFFICE_2`). |
@@ -418,14 +454,15 @@ version) and `sha-<commit>`. There is no `latest` tag.
 
 ## Operations
 
-**Logs.** One line per action (printer, action, email, result) *(0.1.0)*. The
+**Logs.** One line per action (printer, action, email, result). The
 tool never logs passwords or the auth key. `tailscaled` is chatty: lines
 starting `magicsock:`, `wgengine:`, `dns:` and `netmap:` are normal.
 
 **Health.** The image has a healthcheck (`python -m ricoh_ldap_sync.health`),
 and the examples repeat it so it's visible in the compose file. It fails if
-Tailscale is enabled but not Running. From `0.1.0` it also fails if the last
-successful run is older than 3 × `SYNC_INTERVAL_MINUTES`. Docker and Coolify
+Tailscale is enabled but not Running, if no run has succeeded yet, or if the
+last successful run is older than 3 × `SYNC_INTERVAL_MINUTES`. A run succeeds
+when LDAP was read and every printer synced without an error. Docker and Coolify
 report an unhealthy container but don't restart it. The container does exit,
 and get restarted, if `tailscaled` or the worker stops.
 
@@ -471,7 +508,7 @@ printers. Delete them in Web Image Monitor if you no longer want them.
 | `ldap bind ... invalidCredentials` | Wrong bind DN or password. |
 | `ldap search: 0 entries` | Wrong `LDAP_BASE` or `LDAP_FILTER`, or the bind account can't read users. |
 | `FAIL data volume` | `/data` isn't writable. Check the volume mount. |
-| `UDIRECTORY_PERMISSION_DENIED` *(0.1.0)* | The printer account lacks the user administrator role, or the model blocks address book writes over SOAP. See [Tested printers](#tested-printers). |
+| `UDIRECTORY_PERMISSION_DENIED` | The printer account lacks the user administrator role, or the model blocks address book writes over SOAP. See [Tested printers](#tested-printers). |
 | Address book locked on the panel | An address book session was left open. It ends when its time limit runs out. Restarting the printer also clears it. |
 
 ## Security

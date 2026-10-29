@@ -74,6 +74,12 @@ def test_per_printer_password_override():
     assert config.password_var("office-1") == "RICOH_PASSWORD_OFFICE_1"
 
 
+def test_capacity():
+    cfg = load(PRINTERS='[{"name":"office","host":"192.0.2.10","capacity":2000}]')
+    assert cfg.printers[0].capacity == 2000
+    assert load().printers[0].capacity is None
+
+
 def test_default_password_optional_when_every_printer_has_override():
     cfg = load(RICOH_PASSWORD=None, RICOH_PASSWORD_OFFICE_1="only")
     assert cfg.printers[0].password == "only"
@@ -99,6 +105,8 @@ def test_missing_printer_password():
     ('[{"name":"a","host":"http://192.0.2.10"}]', ".host"),
     ('[{"name":"a"}]', ".host"),
     ('[{"name":"a","host":"2001:db8::10"}]', "IPv6"),
+    ('[{"name":"a","host":"192.0.2.10","capacity":0}]', "capacity"),
+    ('[{"name":"a","host":"192.0.2.10","capacity":"2000"}]', "capacity"),
     ('[{"name":"a-b","host":"192.0.2.10"},{"name":"A_B","host":"192.0.2.11"}]', "more than one printer"),
 ])
 def test_bad_printers(printers, fragment):
