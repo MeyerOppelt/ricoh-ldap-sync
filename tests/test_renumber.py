@@ -10,6 +10,9 @@ from ricoh_ldap_sync.ricoh_soap import RicohClient
 
 NUMBERING = ["next", "lowest"]
 
+# Interrupted-renumber tests with "retire"/"rebuild" markers cover state files
+# written by 0.2.0, which copied entries before deleting the old ones.
+
 # Emails deliberately sort differently from names.
 BEA = User("z.bea@example.com", "Bea Baker")
 CAL = User("a.cal@example.com", "Cal Carter")
@@ -18,7 +21,7 @@ ABE = User("y.abe@example.com", "Abe Adams")
 ZED = User("b.zed@example.com", "Zed Zane")
 
 
-def run(printer, users, records, keep_sorted=True, dry_run=False, capacity=None):
+def run(printer, users, records, keep_sorted=True, dry_run=False, capacity=None, force=False):
     saved = {"records": records}
 
     def save(r):
@@ -26,7 +29,7 @@ def run(printer, users, records, keep_sorted=True, dry_run=False, capacity=None)
 
     client = RicohClient("http://192.0.2.10", "admin", "pw", http=printer)
     ok = sync.sync_printer(client, "office", users, records, dry_run=dry_run, max_delete_fraction=1.0,
-                           capacity=capacity, save=save, keep_sorted=keep_sorted)
+                           capacity=capacity, save=save, keep_sorted=keep_sorted, force_renumber=force)
     return ok, saved["records"]
 
 
@@ -134,18 +137,69 @@ class FailingAdds(FakePrinter):
         return super()._putObjects(req)
 
 
-def test_failed_renumber_rolls_back_and_keeps_everyone():
+def test_failed_re_add_leaves_rest_pending_and_next_run_finishes():
     printer = FailingAdds(allow=100)
     _, records = run(printer, [BEA, CAL, DEE], None)
-    printer.allow = 2  # the new user, then one copy, then failure
+    printer.allow = 2  # the new user, then one re-add, then failure
     ok, records = run(printer, [BEA, CAL, DEE, ABE], records)
     assert not ok
-    emails = sorted(e["mail:address"] for e in printer.entries.values())
-    assert emails == sorted(u.email for u in (ABE, BEA, CAL, DEE))  # nobody lost, no duplicates
-    assert_consistent(printer, records)
+    pending = sorted(email for email, rec in records.items() if rec["id"] is None)
+    assert len(pending) == 3  # off the panel until the next run
+    assert len(printer.entries) == 1
     printer.allow = 100
     ok, records = run(printer, [BEA, CAL, DEE, ABE], records)
-    assert ok and owned_names_by_number(printer, records) == ["Abe Adams", "Bea Baker", "Cal Carter", "Dee Dunn"]
+    assert ok
+    assert owned_names_by_number(printer, records) == ["Abe Adams", "Bea Baker", "Cal Carter", "Dee Dunn"]
+    assert_consistent(printer, records)
+
+
+class FailingDeletes(FakePrinter):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.refuse_deletes = False
+
+    def _deleteObjects(self, req):
+        if self.refuse_deletes:
+            return fault("UDIRECTORY_INTERNAL_ERROR", "busy")
+        return super()._deleteObjects(req)
+
+
+def test_failed_delete_restores_records_and_keeps_everyone():
+    printer = FailingDeletes()
+    _, records = run(printer, [BEA, CAL], None)
+    printer.refuse_deletes = True
+    ok, records = run(printer, [BEA, CAL, ABE], records)
+    assert not ok
+    assert all(rec["id"] is not None for rec in records.values())
+    assert len(printer.entries) == 3
+    assert_consistent(printer, records)
+
+
+@pytest.mark.parametrize("numbering", NUMBERING)
+def test_renumber_restarts_numbers_from_the_lowest_free(numbering):
+    printer = FakePrinter(numbering=numbering)
+    _, records = run(printer, [BEA, CAL, DEE], None)
+    for _ in range(3):  # repeated renumbers must not push the numbers up
+        newcomer = User(f"new{_}@example.com", f"Aa{_} New")
+        users = [BEA, CAL, DEE, newcomer]
+        ok, records = run(printer, users, records)
+        assert ok
+        assert sorted(int(e["index"]) for e in printer.entries.values()) == [1, 2, 3, 4]
+        assert owned_names_by_number(printer, records)[0] == f"Aa{_} New"
+        _, records = run(printer, [BEA, CAL, DEE], records)  # newcomer leaves again
+
+
+def test_interrupted_after_delete_is_re_added_in_order():
+    printer = FakePrinter()
+    _, records = run(printer, [BEA, CAL, DEE], None)
+    # Crash after deleting, before re-adding: records are unconfirmed adds, entries gone.
+    for rec in records.values():
+        printer.entries.pop(rec["id"])
+        rec["id"] = None
+    ok, records = run(printer, [BEA, CAL, DEE], records)
+    assert ok
+    assert owned_names_by_number(printer, records) == ["Bea Baker", "Cal Carter", "Dee Dunn"]
+    assert_consistent(printer, records)
 
 
 @pytest.mark.parametrize("numbering", NUMBERING)
@@ -176,15 +230,37 @@ def test_interrupted_while_copying_removes_unrecorded_copies():
     assert_consistent(printer, records)
 
 
-def test_capacity_too_small_for_copies_skips_renumber():
+def test_renumber_works_when_the_book_is_nearly_full():
     printer = FakePrinter()
     _, records = run(printer, [BEA, CAL], None)
-    mark = len(printer.calls)
-    ok, records = run(printer, [BEA, CAL, ABE], records, capacity=4)
-    assert not ok and writes(printer, mark) == ["putObjects"]
-    assert len(printer.entries) == 3
+    ok, records = run(printer, [BEA, CAL, ABE], records, capacity=3)
+    assert ok and owned_names_by_number(printer, records) == ["Abe Adams", "Bea Baker", "Cal Carter"]
 
 
 def test_sort_key_ignores_case_and_accents():
     names = ["élodie", "Zoe", "anna", "Émile", "bob"]
     assert sorted(names, key=sync.sort_key) == ["anna", "bob", "élodie", "Émile", "Zoe"]
+
+
+@pytest.mark.parametrize("numbering", NUMBERING)
+def test_forced_renumber_resets_numbers_of_a_sorted_list(numbering):
+    # A sorted list left high by 0.2.0's copy-first renumber.
+    printer = FakePrinter([dict(person(u.name, u.email), index=str(27 + n))
+                           for n, u in enumerate([BEA, CAL, DEE])], numbering=numbering)
+    _, records = run(printer, [BEA, CAL, DEE], None)  # adopts them
+    mark = len(printer.calls)
+    ok, records = run(printer, [BEA, CAL, DEE], records)
+    assert ok and writes(printer, mark) == []  # sorted, so nothing to do
+    ok, records = run(printer, [BEA, CAL, DEE], records, force=True, keep_sorted=False)
+    assert ok
+    assert sorted(int(e["index"]) for e in printer.entries.values()) == [1, 2, 3]
+    assert owned_names_by_number(printer, records) == ["Bea Baker", "Cal Carter", "Dee Dunn"]
+    assert_consistent(printer, records)
+
+
+def test_forced_renumber_in_dry_run_writes_nothing():
+    printer = FakePrinter()
+    _, records = run(printer, [BEA, CAL], None)
+    mark = len(printer.calls)
+    ok, _ = run(printer, [BEA, CAL], records, force=True, dry_run=True)
+    assert ok and writes(printer, mark) == []

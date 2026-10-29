@@ -133,7 +133,11 @@ letter A–Z get Frequent.
 added. Panels list entries within a tab by display priority, then by
 registration number. A new entry therefore appears after the existing ones,
 whatever its name. This is why `KEEP_SORTED` adds entries in name order and,
-when needed, re-adds them rather than trying to set `index` directly.
+when needed, deletes and re-adds them, rather than trying to set `index`
+directly. Printers seen so far number a new entry after the highest one in
+use. So copying entries before deleting the originals pushes the numbers up
+with every renumber, while deleting first lets them start again from the
+bottom.
 
 ## Known model differences
 

@@ -7,12 +7,13 @@ is an add that was sent but not yet confirmed. The next run adopts the entry if 
 landed, or adds it again if it didn't.
 
 With KEEP_SORTED, the sync keeps its own entries in alphabetical order by
-registration number. When the order is wrong it adds a fresh copy of each of
-its entries in name order, so the printer hands out ascending numbers, and only
-then deletes the old copies. Two markers make this safe to interrupt:
-``"rebuild": true`` while copies are being made (any exact duplicate is ours),
-and ``"retire": [old ids]`` once the new copy is recorded. The next run deletes
-whatever is left over.
+registration number. When the order is wrong it deletes all of its entries and
+re-adds them in name order, so the printer numbers them from the lowest free
+registration number upwards. Before deleting, every record is turned into an
+unconfirmed add (``"id": null``), so if the run is interrupted the next run
+re-adds whoever is missing. Records may also carry ``"rebuild"`` / ``"retire"``
+markers left by 0.2.0, which renumbered by copying first; the plan still
+cleans those up.
 """
 
 from __future__ import annotations
@@ -312,7 +313,7 @@ def log_plan(p: Plan, dry_run: bool) -> None:
 
 def sync_printer(client: RicohClient, printer: str, users: list[User], records: Records | None, *,
                  dry_run: bool, max_delete_fraction: float, capacity: int | None, save,
-                 keep_sorted: bool = False) -> bool:
+                 keep_sorted: bool = False, force_renumber: bool = False) -> bool:
     """Sync one printer. ``save(records)`` persists this printer's records after every change.
 
     Returns True when every planned change succeeded. Raises RicohError when the
@@ -328,8 +329,8 @@ def sync_printer(client: RicohClient, printer: str, users: list[User], records: 
             return True
         records = dict(records or {})
         ok = _apply(client, p, records, set(ids), save)
-        if keep_sorted:
-            ok &= _renumber(client, printer, records, {u.email: u for u in users}, capacity, save)
+        if keep_sorted or force_renumber:
+            ok &= _renumber(client, printer, records, {u.email: u for u in users}, save, force_renumber)
         return ok
 
 
@@ -415,81 +416,77 @@ def _apply(client: RicohClient, p: Plan, records: Records, before_ids: set[int],
     return ok
 
 
-def _renumber(client: RicohClient, printer: str, records: Records, users: dict[str, User], capacity: int | None,
-              save) -> bool:
-    """Re-add this printer's owned entries in name order if their registration numbers are out of order."""
+def _renumber(client: RicohClient, printer: str, records: Records, users: dict[str, User], save,
+              force: bool = False) -> bool:
+    """Delete this printer's owned entries and re-add them in name order if they're out of order (or if forced)."""
     if any(rec.get("retire") or rec.get("rebuild") for rec in records.values()):
         log.error("printer=%s renumber skipped: copies from an earlier renumber still need deleting", printer)
         return False
-    ids, count = client.search_ids()
+    if any(rec.get("id") is None for email, rec in records.items() if email in users):
+        log.error("printer=%s renumber skipped: some adds are unconfirmed; the next run settles them first", printer)
+        return False
+    ids, _ = client.search_ids()
     entries = {e.id: e for e in client.get_entries(ids)}
     owned = [(email, rec, entries[rec["id"]]) for email, rec in records.items()
              if email in users and rec.get("id") in entries and entries[rec["id"]].email == email]
     if any(rec["name"] != desired(users[email]).name for email, rec, _ in owned):
         log.error("printer=%s renumber skipped: an earlier change in this run failed", printer)
         return False
-    if in_order([(registration_number(e), sort_key(rec["name"], email)) for email, rec, e in owned]):
+    if not owned or (not force and in_order([(registration_number(e), sort_key(rec["name"], email))
+                                             for email, rec, e in owned])):
         return True
-    if capacity is not None and count + len(owned) > capacity:
-        log.error("printer=%s renumber skipped: needs room for %d temporary copies", printer, len(owned))
-        return False
 
     ordered = sorted(owned, key=lambda o: sort_key(o[1]["name"], o[0]))
-    log.info("printer=%s renumber: re-adding %d entries in name order", printer, len(ordered))
+    log.info("printer=%s renumber: deleting %d entries and re-adding them in name order", printer, len(ordered))
+    # From here until each re-add is confirmed, these people are off the panel.
+    # Recording them as unconfirmed adds first means an interrupted run is
+    # finished by the next one, which re-adds whoever is missing.
     for _, rec, _ in ordered:
-        rec["rebuild"] = True
+        rec["id"] = None
     save(records)
 
-    before = set(ids)
-    error = None
-    for email, rec, _ in ordered:
-        try:
-            client.add_entry(desired(users[email]).add_props())
-        except RicohError as e:
-            error = f"adding a copy for {email} failed: {e}"
-            break
-    if error is None:
-        new_ids, _ = client.search_ids()
-        new = [e for e in client.get_entries([i for i in new_ids if i not in before])]
-        mapping: dict[str, int] = {}
-        for email, rec, _ in ordered:
-            match = next((e for e in new if e.email == email and e.name == rec["name"]
-                          and e.id not in mapping.values()), None)
-            if match is None:
-                error = f"the copy for {email} was not found"
-                break
-            mapping[email] = match.id
-    if error is not None:
-        # Undo: remove the copies made so far; the old entries were never touched.
-        log.error("printer=%s renumber stopped: %s; removing the copies", printer, error)
-        try:
-            new_ids, _ = client.search_ids()
-            copies = [e.id for e in client.get_entries([i for i in new_ids if i not in before])
-                      if any(e.email == email and e.name == rec["name"] for email, rec, _ in ordered)]
-            if copies:
-                client.delete_entries(copies)
-            for _, rec, _ in ordered:
-                rec.pop("rebuild", None)
-            save(records)
-        except RicohError as e:
-            log.error("printer=%s could not remove the copies (%s); the next run will", printer, e)
-        return False
-
-    for email, rec, old in ordered:
-        rec["retire"] = [old.id]
-        rec["id"] = mapping[email]
-    save(records)
     try:
         for start in range(0, len(ordered), 50):
             client.delete_entries([old.id for _, _, old in ordered[start:start + 50]])
     except RicohError as e:
-        log.error("printer=%s renumber: deleting the old copies failed (%s); the next run will finish it", printer, e)
+        log.error("printer=%s renumber stopped: deleting failed (%s); nothing was re-added", printer, e)
+        try:
+            still_there = set(client.search_ids()[0])
+        except RicohError:
+            still_there = set()
+        for _, rec, old in ordered:
+            if old.id in still_there:
+                rec["id"] = old.id
+        save(records)
         return False
+
+    before = set(client.search_ids()[0])
+    added: list[str] = []
+    error = None
+    for email, _, _ in ordered:
+        try:
+            client.add_entry(desired(users[email]).add_props())
+        except RicohError as e:
+            error = f"re-adding {email} failed: {e}"
+            break
+        added.append(email)
+
     now = _now()
-    for _, rec, _ in ordered:
-        rec.pop("retire", None)
-        rec.pop("rebuild", None)
+    new_ids, _ = client.search_ids()
+    new = client.get_entries([i for i in new_ids if i not in before])
+    for email in added:
+        rec = records[email]
+        match = next((e for e in new if e.email == email and e.name == rec["name"]), None)
+        if match is None:
+            error = error or f"the re-added entry for {email} was not found"
+            continue
+        rec["id"] = match.id
         rec["synced_at"] = now
     save(records)
+    if error:
+        missing = sum(1 for _, rec, _ in ordered if rec["id"] is None)
+        log.error("printer=%s renumber incomplete: %s; %d entries will be re-added on the next run",
+                  printer, error, missing)
+        return False
     action(printer, "renumber", "*", "ok", entries=len(ordered))
     return True

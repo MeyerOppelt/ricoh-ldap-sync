@@ -42,7 +42,7 @@ services:
       start_period: 120s
 
   ricoh-ldap-sync:
-    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.2.0
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.3.0
     restart: unless-stopped
     depends_on:
       ldap:

@@ -4,6 +4,28 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.3.0 - 2026-10-29
+
+### Changed
+
+- `KEEP_SORTED` now deletes the sync's entries before re-adding them in name
+  order. In 0.2.0, copies were added first, so every renumber pushed the
+  registration numbers up by the size of the list. Now they start again from
+  the lowest free number. Before deleting, each entry is recorded as awaiting
+  re-add, so a failed or interrupted renumber is finished by the next run. Until
+  then, the affected people are off the panel. If the delete fails, nothing is
+  re-added.
+- A renumber no longer needs room for a temporary copy of every entry.
+- Leftover copies from an interrupted 0.2.0 renumber are still cleaned up.
+- `tailscaled`'s `[RATELIMIT]` log notices are filtered out. They only meant
+  it was holding back repeats of a debug message.
+
+### Added
+
+- `python -m ricoh_ldap_sync --once --renumber` re-adds the sync's entries in
+  name order from the lowest free number, even if they're already sorted.
+  Use it to bring down numbers left high by 0.2.0.
+
 ## 0.2.0 - 2026-10-29
 
 ### Added

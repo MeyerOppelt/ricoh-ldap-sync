@@ -121,3 +121,9 @@ def test_once_live(monkeypatch, printers, tmp_path):
     assert main.main(["--once"]) == 0
     assert (tmp_path / "state.json").exists()
     assert any("putObjects" in p.calls for p in printers.values())
+
+
+def test_renumber_requires_once(monkeypatch):
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    assert main.main(["--renumber"]) == 2

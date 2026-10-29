@@ -3,6 +3,7 @@
     python -m ricoh_ldap_sync              # the container's worker loop
     python -m ricoh_ldap_sync --once       # one sync now, then exit
     python -m ricoh_ldap_sync --once --dry-run   # preview one sync, write nothing
+    python -m ricoh_ldap_sync --once --renumber  # one sync, then re-add entries in name order from the lowest number
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ def run_lock(path: str = LOCK_FILE):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def run_once(cfg: config.Config, state_path: str) -> bool:
+def run_once(cfg: config.Config, state_path: str, force_renumber: bool = False) -> bool:
     """One sync of every printer. Returns True if LDAP and every printer succeeded."""
     try:
         users = ldap_source.fetch_users(cfg)
@@ -77,7 +78,8 @@ def run_once(cfg: config.Config, state_path: str) -> bool:
         try:
             ok &= sync.sync_printer(client, printer.name, users, records, dry_run=cfg.dry_run,
                                     max_delete_fraction=cfg.max_delete_fraction,
-                                    capacity=printer.capacity, save=save, keep_sorted=cfg.keep_sorted)
+                                    capacity=printer.capacity, save=save, keep_sorted=cfg.keep_sorted,
+                                    force_renumber=force_renumber)
         except RicohError as e:
             ok = False
             log.error("printer=%s error: %s", printer.name, e)
@@ -92,9 +94,9 @@ def _stop(signum, frame):
     raise SystemExit(0)
 
 
-def sync_now(cfg: config.Config) -> bool:
+def sync_now(cfg: config.Config, force_renumber: bool = False) -> bool:
     with run_lock(LOCK_FILE):
-        ok = run_once(cfg, STATE_FILE)
+        ok = run_once(cfg, STATE_FILE, force_renumber)
     if ok:
         log.info("run complete")
     else:
@@ -106,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m ricoh_ldap_sync", description=__doc__.splitlines()[0])
     parser.add_argument("--once", action="store_true", help="run one sync now and exit (0 if it succeeded)")
     parser.add_argument("--dry-run", action="store_true", help="log the plan without writing, whatever DRY_RUN says")
+    parser.add_argument("--renumber", action="store_true",
+                        help="with --once: delete and re-add the sync's entries in name order, even if already sorted")
     parser.add_argument("--version", action="version", version=f"ricoh-ldap-sync {__version__}")
     args = parser.parse_args(argv)
     try:
@@ -115,6 +119,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.dry_run:
         cfg = dataclasses.replace(cfg, dry_run=True)
+    if args.renumber and not args.once:
+        print("--renumber only works with --once", file=sys.stderr)
+        return 2
     logging.basicConfig(level=cfg.log_level.upper(), format="%(asctime)s %(levelname)s %(message)s",
                         datefmt="%Y-%m-%dT%H:%M:%SZ", stream=sys.stdout)
     logging.Formatter.converter = time.gmtime
@@ -124,7 +131,9 @@ def main(argv: list[str] | None = None) -> int:
     mode = ("DRY RUN (nothing is written)" if cfg.dry_run else "LIVE") + (", keeping entries sorted" if cfg.keep_sorted else "")
     if args.once:
         log.info("ricoh-ldap-sync %s: one run, %d printer(s), %s", __version__, len(cfg.printers), mode)
-        return 0 if sync_now(cfg) else 1
+        if args.renumber and cfg.dry_run:
+            log.info("--renumber ignored: dry run writes nothing")
+        return 0 if sync_now(cfg, force_renumber=args.renumber) else 1
 
     log.info("ricoh-ldap-sync %s starting: %d printer(s), every %d min, %s", __version__, len(cfg.printers),
              cfg.sync_interval_minutes, mode)

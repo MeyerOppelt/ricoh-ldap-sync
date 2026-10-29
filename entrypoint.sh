@@ -43,7 +43,10 @@ tailscaled \
   --statedir="$TS_STATE_DIR" \
   --socket="$TS_SOCKET" \
   --outbound-http-proxy-listen=localhost:1055 \
-  --no-logs-no-support &
+  --no-logs-no-support \
+  > >(grep --line-buffered -v '\[RATELIMIT\]') 2>&1 &
+# $! is tailscaled itself, not the filter. The filter only drops tailscaled's
+# notices that it is holding back repeats of a debug message.
 tsd_pid=$!
 
 stopping=""
