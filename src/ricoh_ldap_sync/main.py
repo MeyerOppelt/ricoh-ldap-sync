@@ -77,7 +77,7 @@ def run_once(cfg: config.Config, state_path: str) -> bool:
         try:
             ok &= sync.sync_printer(client, printer.name, users, records, dry_run=cfg.dry_run,
                                     max_delete_fraction=cfg.max_delete_fraction,
-                                    capacity=printer.capacity, save=save)
+                                    capacity=printer.capacity, save=save, keep_sorted=cfg.keep_sorted)
         except RicohError as e:
             ok = False
             log.error("printer=%s error: %s", printer.name, e)
@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     signal.signal(signal.SIGTERM, _stop)
 
-    mode = "DRY RUN (nothing is written)" if cfg.dry_run else "LIVE"
+    mode = ("DRY RUN (nothing is written)" if cfg.dry_run else "LIVE") + (", keeping entries sorted" if cfg.keep_sorted else "")
     if args.once:
         log.info("ricoh-ldap-sync %s: one run, %d printer(s), %s", __version__, len(cfg.printers), mode)
         return 0 if sync_now(cfg) else 1

@@ -42,7 +42,7 @@ services:
       start_period: 120s
 
   ricoh-ldap-sync:
-    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.1.0
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.2.0
     restart: unless-stopped
     depends_on:
       ldap:
@@ -62,6 +62,7 @@ services:
       TS_LOGIN_SERVER: ${SYNC_TS_LOGIN_SERVER:-}  # e.g. https://headscale.example.com
       TS_HOSTNAME: ${SYNC_TS_HOSTNAME:-ricoh-ldap-sync}
       DRY_RUN: ${SYNC_DRY_RUN:-true}
+      KEEP_SORTED: ${SYNC_KEEP_SORTED:-false}
       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
     volumes:
       - ./ricoh-ldap-sync/data:/data

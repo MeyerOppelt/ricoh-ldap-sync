@@ -4,6 +4,23 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.2.0 - 2026-10-29
+
+### Added
+
+- `KEEP_SORTED=true` keeps the sync's entries in alphabetical order. When
+  their registration numbers are out of name order (a new person who sorts
+  earlier, or a rename), the sync adds a fresh copy of each of its entries in
+  name order, then deletes the old ones. Adding first means nobody disappears
+  if something fails. A failed renumber is rolled back, and an interrupted one
+  is finished or undone on the next run. Hand-made entries are never touched.
+  Off by default.
+
+### Changed
+
+- New entries are added in name order (ignoring case and accents) instead of
+  email order, so each batch is alphabetical on the panel.
+
 ## 0.1.0 - 2026-10-29
 
 First release.

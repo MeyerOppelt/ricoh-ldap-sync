@@ -67,6 +67,7 @@ class Config:
     ts_hostname: str = DEFAULT_TS_HOSTNAME
     sync_interval_minutes: int = DEFAULT_INTERVAL_MINUTES
     dry_run: bool = True
+    keep_sorted: bool = False
     max_delete_fraction: float = DEFAULT_MAX_DELETE_FRACTION
     log_level: str = "info"
 
@@ -143,6 +144,7 @@ def load(env: Mapping[str, str] | None = None) -> Config:
         problems.append("MAX_DELETE_FRACTION must be between 0 and 1")
 
     dry_run = _bool(get("DRY_RUN"), True, "DRY_RUN", problems)
+    keep_sorted = _bool(get("KEEP_SORTED"), False, "KEEP_SORTED", problems)
 
     log_level = (get("LOG_LEVEL") or "info").lower()
     if log_level not in LOG_LEVELS:
@@ -170,6 +172,7 @@ def load(env: Mapping[str, str] | None = None) -> Config:
         ts_hostname=get("TS_HOSTNAME") or DEFAULT_TS_HOSTNAME,
         sync_interval_minutes=interval,
         dry_run=dry_run,
+        keep_sorted=keep_sorted,
         max_delete_fraction=fraction,
         log_level=log_level,
     )

@@ -34,6 +34,7 @@ def test_defaults():
     assert cfg.ldap_attr_mail == "mail"
     assert cfg.ricoh_user == "admin"
     assert cfg.dry_run is True
+    assert cfg.keep_sorted is False
     assert cfg.sync_interval_minutes == 15
     assert cfg.max_delete_fraction == 0.3
     assert cfg.log_level == "info"
@@ -124,6 +125,7 @@ def test_bad_printers(printers, fragment):
     ("MAX_DELETE_FRACTION", "1.5"),
     ("MAX_DELETE_FRACTION", "lots"),
     ("DRY_RUN", "maybe"),
+    ("KEEP_SORTED", "sometimes"),
     ("LOG_LEVEL", "verbose"),
 ])
 def test_malformed_values_name_the_variable(var, value):

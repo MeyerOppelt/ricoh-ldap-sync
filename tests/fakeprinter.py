@@ -37,9 +37,11 @@ def props_xml(props: dict[str, str]) -> str:
 class FakePrinter:
     """Acts as a requests.Session: post() receives the SOAP request."""
 
-    def __init__(self, entries: list[dict[str, str]] | None = None):
+    def __init__(self, entries: list[dict[str, str]] | None = None, numbering: str = "next"):
         self.entries: dict[int, dict[str, str]] = {}
         self.next_id = 1
+        # Registration numbers for new entries: "next" after the highest, or the "lowest" free one.
+        self.numbering = numbering
         for props in entries or []:
             self.insert(dict(props))
         self.calls: list[str] = []
@@ -54,9 +56,17 @@ class FakePrinter:
         entry_id = int(props.get("id") or self.next_id)
         self.next_id = max(self.next_id, entry_id) + 1
         props["id"] = str(entry_id)
-        props.setdefault("index", str(entry_id))
+        if "index" not in props:
+            used = {int(e["index"]) for e in self.entries.values()}
+            if self.numbering == "lowest":
+                props["index"] = str(next(n for n in range(1, len(used) + 2) if n not in used))
+            else:
+                props["index"] = str(max(used, default=0) + 1)
         self.entries[entry_id] = props
         return entry_id
+
+    def names_by_number(self) -> list[str]:
+        return [e["name"] for e in sorted(self.entries.values(), key=lambda e: int(e["index"]))]
 
     def post(self, url, data, headers, timeout):
         method = headers["SOAPAction"].split("#", 1)[1]

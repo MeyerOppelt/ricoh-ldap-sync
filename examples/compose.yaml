@@ -2,7 +2,7 @@
 # environment or a secrets manager, never in this file.
 services:
   ricoh-ldap-sync:
-    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.1.0
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.2.0
     restart: unless-stopped
     environment:
       LDAP_URL: ${LDAP_URL:-ldaps://ldap.example.com:636}
@@ -19,6 +19,7 @@ services:
       TS_LOGIN_SERVER: ${TS_LOGIN_SERVER:-}  # e.g. https://headscale.example.com
       TS_HOSTNAME: ${TS_HOSTNAME:-ricoh-ldap-sync}
       DRY_RUN: ${DRY_RUN:-true}
+      KEEP_SORTED: ${KEEP_SORTED:-false}
       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
       MAX_DELETE_FRACTION: ${MAX_DELETE_FRACTION:-0.3}
       LOG_LEVEL: ${LOG_LEVEL:-info}

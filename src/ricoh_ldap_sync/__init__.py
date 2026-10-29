@@ -1,3 +1,3 @@
 """Keep Ricoh printer address books in sync with an LDAP directory."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

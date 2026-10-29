@@ -90,6 +90,41 @@ Each run:
 Printers sync independently: one failing doesn't block the others. When a
 printer's address book is full, adds stop and an error is logged.
 
+### Keeping entries in alphabetical order
+
+The printer lists entries by registration number, and gives each new entry the
+next free number. So someone who joins later appears at the end of their index
+tab, not in alphabetical position. Each run adds new people in name order, so a
+batch of new entries is always alphabetical. Over time, though, the order drifts.
+
+With `KEEP_SORTED=true`, the sync keeps its own entries in alphabetical order:
+
+1. After a run's changes, it checks whether its entries' registration numbers
+   follow name order (ignoring case and accents).
+2. If they don't, it adds a fresh copy of each of its entries in name order, so
+   the printer hands out ascending numbers.
+3. Once every copy is confirmed, it deletes the old entries.
+
+Adding copies first means nobody disappears from the panel if something fails.
+If a copy can't be added, the copies made so far are removed and the old
+entries stay as they were. If the container stops partway through, the next
+run finishes or undoes the job. A removal never triggers a renumber, and
+neither does a new person whose name sorts last.
+
+Things to know before turning it on:
+
+- **Only the sync's own entries are renumbered.** Hand-made entries keep their
+  numbers, so they stay where they are among the sorted ones.
+- **A renumber rewrites every sync-owned entry.** Each one gets a new
+  registration number and ID, and printer-side data such as "date last used"
+  starts again. Changes someone made on the panel to a sync-owned entry (a
+  folder, a user code) are lost.
+- **Copies need room.** The address book must have space for one copy of every
+  sync-owned entry at the same time. If `capacity` is set and there isn't
+  enough room, the renumber is skipped with an error.
+- **Brief duplicates.** During a renumber, which takes a few seconds, the panel
+  can briefly show each person twice.
+
 ## Safety
 
 The sync is built so that a misconfiguration or outage leaves the printer
@@ -280,7 +315,7 @@ docker compose logs -f ricoh-ldap-sync
 ```
 
 Always reference an exact image version, e.g.
-`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.1.0`, never `latest`. That way an
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.2.0`, never `latest`. That way an
 upgrade happens only when you change the tag.
 
 #### Coolify
@@ -457,6 +492,7 @@ docker exec <container> python -m ricoh_ldap_sync --once --dry-run
 | `TS_HOSTNAME` | no | `ricoh-ldap-sync` | Node name on the tailnet. |
 | `SYNC_INTERVAL_MINUTES` | no | `15` | Minutes between runs. |
 | `DRY_RUN` | no | `true` | `true` logs the plan only. `false` writes to printers. |
+| `KEEP_SORTED` | no | `false` | `true` re-adds the sync's entries in name order whenever their registration numbers are out of order. See [Keeping entries in alphabetical order](#keeping-entries-in-alphabetical-order). |
 | `MAX_DELETE_FRACTION` | no | `0.3` | Safety brake threshold, 0 to 1. |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warning` or `error`. |
 
@@ -554,6 +590,9 @@ printers. Delete them in Web Image Monitor if you no longer want them.
 | `safety brake: LDAP returned 0 users` | The filter or base matches nobody, or the directory was emptied. Nothing is deleted until users come back. |
 | `action=skip ... a manually created entry already has this email` | Someone added this person by hand. Delete that entry in Web Image Monitor if you want the sync to manage them. It's added on the next run. |
 | `run finished with errors` every run, container unhealthy | Look for the `ERROR` line above it: a printer that's off or unreachable, LDAP down, or a refused write. |
+| `renumber skipped: needs room for N temporary copies` | The address book can't hold a copy of every sync-owned entry at once. Raise `capacity` if it's set too low, or free space. |
+| `renumber stopped: ...; removing the copies` | A copy couldn't be added (for example a refused write). Everyone keeps their old entry. The next run tries again. |
+| `renumber: deleting the old copies failed` | The new copies are recorded. The next run deletes the old ones (logged as `action=retire`). |
 | Address book locked on the panel | An address book session was left open. It ends when its time limit runs out. Restarting the printer also clears it. |
 
 ## Security

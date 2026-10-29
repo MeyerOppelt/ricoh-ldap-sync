@@ -5,6 +5,14 @@ record is ``{"id": <entry id or null>, "name": <name written>, "synced_at": <ISO
 The sync only updates or deletes entries listed there. A record with ``"id": null``
 is an add that was sent but not yet confirmed. The next run adopts the entry if it
 landed, or adds it again if it didn't.
+
+With KEEP_SORTED, the sync keeps its own entries in alphabetical order by
+registration number. When the order is wrong it adds a fresh copy of each of
+its entries in name order, so the printer hands out ascending numbers, and only
+then deletes the old copies. Two markers make this safe to interrupt:
+``"rebuild": true`` while copies are being made (any exact duplicate is ours),
+and ``"retire": [old ids]`` once the new copy is recorded. The next run deletes
+whatever is left over.
 """
 
 from __future__ import annotations
@@ -45,6 +53,22 @@ def title1_tag(name: str) -> int | None:
         if "A" <= ch <= "Z":
             return next(i + 2 for i, group in enumerate(TITLE1_GROUPS) if ch in group)
     return None
+
+
+def sort_key(name: str, email: str = "") -> tuple[str, str]:
+    """Alphabetical order ignoring accents and case; email breaks ties."""
+    plain = "".join(c for c in unicodedata.normalize("NFKD", name) if not unicodedata.combining(c))
+    return (plain.casefold(), email)
+
+
+def registration_number(entry: Entry) -> int:
+    value = entry.props.get("index", "")
+    return int(value) if value.isdigit() else entry.id
+
+
+def in_order(positions_and_keys: list[tuple[int, tuple[str, str]]]) -> bool:
+    keys = [key for _, key in sorted(positions_and_keys)]
+    return keys == sorted(keys)
 
 
 def truncate(text: str, limit: int) -> str:
@@ -103,6 +127,8 @@ class Plan:
     braked: list[tuple[int, str, str]] = field(default_factory=list)
     brake_reason: str | None = None
     unchanged: list[str] = field(default_factory=list)  # emails already correct
+    retire: list[tuple[int, str]] = field(default_factory=list)  # leftover copies from an interrupted renumber
+    renumber: int = 0  # entries a renumber would re-add (estimate; the live run checks again)
 
     @property
     def changes(self) -> int:
@@ -110,7 +136,8 @@ class Plan:
 
 
 def plan(printer: str, users: list[User], entries: list[Entry], records: Records | None,
-         max_delete_fraction: float, capacity: int | None = None, count: int | None = None) -> Plan:
+         max_delete_fraction: float, capacity: int | None = None, count: int | None = None,
+         keep_sorted: bool = False) -> Plan:
     """Compare LDAP users with the printer's entries. ``records`` is None when no state exists for this printer."""
     p = Plan(printer)
     state_known = records is not None
@@ -139,6 +166,19 @@ def plan(printer: str, users: list[User], entries: list[Entry], records: Records
             valid[email] = rec
             owned.add(entry_id)
 
+    retire: dict[int, str] = {}
+    for email, rec in valid.items():
+        for old in rec.get("retire", []):
+            entry = by_id.get(old)
+            if entry is not None and entry.email == email and old != rec["id"]:
+                retire[old] = email
+        if rec.get("rebuild"):
+            for entry in by_email.get(email, []):
+                if entry.id != rec["id"] and entry.name == rec.get("name"):
+                    retire[entry.id] = email
+    p.retire = sorted(retire.items())
+    owned.update(retire)
+
     for email, rec in pending.items():
         if email not in wanted:
             p.forgotten.append((email, "unconfirmed add for a user no longer in LDAP; check the printer by hand"))
@@ -164,6 +204,7 @@ def plan(printer: str, users: list[User], entries: list[Entry], records: Records
                 p.manual.append((user.email, others[0].id))
             continue
         p.adds.append(d)
+    p.adds.sort(key=lambda d: sort_key(d.name, d.email))
 
     deletes = [(rec["id"], email, rec.get("name", "")) for email, rec in valid.items() if email not in wanted]
     if deletes:
@@ -181,6 +222,16 @@ def plan(printer: str, users: list[User], entries: list[Entry], records: Records
         free = max(capacity - count + len(p.deletes), 0)
         if len(p.adds) > free:
             p.adds, p.full = p.adds[:free], p.adds[free:]
+
+    if keep_sorted:
+        deleted = {email for _, email, _ in p.deletes}
+        final = [(registration_number(by_id[rec["id"]]), sort_key(desired(wanted[email]).name, email))
+                 for email, rec in valid.items() if email in wanted and email not in deleted]
+        final += [(registration_number(by_id[i]), sort_key(d.name, d.email)) for i, d in p.adoptions]
+        # New entries usually get numbers after the existing ones.
+        final += [(10**9 + n, sort_key(d.name, d.email)) for n, d in enumerate(p.adds)]
+        if not in_order(final):
+            p.renumber = len(final)
     return p
 
 
@@ -246,6 +297,10 @@ def log_plan(p: Plan, dry_run: bool) -> None:
         action(p.printer, "add", d.email, result, name=d.name, key_display=d.key_display)
     for d in p.full:
         action(p.printer, "add", d.email, "skipped: address book is full", logging.ERROR, name=d.name)
+    for entry_id, email in p.retire:
+        action(p.printer, "retire", email, result, entry=entry_id, reason="copy left by an interrupted renumber")
+    if p.renumber:
+        action(p.printer, "renumber", "*", result if dry_run else "will check after changes", entries=p.renumber)
     if p.brake_reason:
         log.error("printer=%s safety brake: %s; skipping all %d deletes", p.printer, p.brake_reason, len(p.braked))
         for entry_id, email, name in p.braked:
@@ -256,7 +311,8 @@ def log_plan(p: Plan, dry_run: bool) -> None:
 
 
 def sync_printer(client: RicohClient, printer: str, users: list[User], records: Records | None, *,
-                 dry_run: bool, max_delete_fraction: float, capacity: int | None, save) -> bool:
+                 dry_run: bool, max_delete_fraction: float, capacity: int | None, save,
+                 keep_sorted: bool = False) -> bool:
     """Sync one printer. ``save(records)`` persists this printer's records after every change.
 
     Returns True when every planned change succeeded. Raises RicohError when the
@@ -266,16 +322,32 @@ def sync_printer(client: RicohClient, printer: str, users: list[User], records: 
         ids, count = client.search_ids()
         entries = client.get_entries(ids)
         log.info("printer=%s address book: %d entries", printer, count)
-        p = plan(printer, users, entries, records, max_delete_fraction, capacity, count)
+        p = plan(printer, users, entries, records, max_delete_fraction, capacity, count, keep_sorted)
         log_plan(p, dry_run)
         if dry_run:
             return True
-        return _apply(client, p, dict(records or {}), set(ids), save)
+        records = dict(records or {})
+        ok = _apply(client, p, records, set(ids), save)
+        if keep_sorted:
+            ok &= _renumber(client, printer, records, {u.email: u for u in users}, capacity, save)
+        return ok
 
 
 def _apply(client: RicohClient, p: Plan, records: Records, before_ids: set[int], save) -> bool:
     ok = True
     printer = p.printer
+    if p.retire:
+        try:
+            client.delete_entries([entry_id for entry_id, _ in p.retire])
+            for entry_id, email in p.retire:
+                action(printer, "retire", email, "ok", entry=entry_id)
+        except RicohError as e:
+            ok = False
+            log.error("printer=%s could not delete copies left by an interrupted renumber: %s", printer, e)
+    if ok:
+        for rec in records.values():
+            rec.pop("retire", None)
+            rec.pop("rebuild", None)
     for email, _ in p.forgotten:
         records.pop(email, None)
     for entry_id, d in p.adoptions:
@@ -341,3 +413,83 @@ def _apply(client: RicohClient, p: Plan, records: Records, before_ids: set[int],
             records[email]["synced_at"] = now
     save(records)
     return ok
+
+
+def _renumber(client: RicohClient, printer: str, records: Records, users: dict[str, User], capacity: int | None,
+              save) -> bool:
+    """Re-add this printer's owned entries in name order if their registration numbers are out of order."""
+    if any(rec.get("retire") or rec.get("rebuild") for rec in records.values()):
+        log.error("printer=%s renumber skipped: copies from an earlier renumber still need deleting", printer)
+        return False
+    ids, count = client.search_ids()
+    entries = {e.id: e for e in client.get_entries(ids)}
+    owned = [(email, rec, entries[rec["id"]]) for email, rec in records.items()
+             if email in users and rec.get("id") in entries and entries[rec["id"]].email == email]
+    if any(rec["name"] != desired(users[email]).name for email, rec, _ in owned):
+        log.error("printer=%s renumber skipped: an earlier change in this run failed", printer)
+        return False
+    if in_order([(registration_number(e), sort_key(rec["name"], email)) for email, rec, e in owned]):
+        return True
+    if capacity is not None and count + len(owned) > capacity:
+        log.error("printer=%s renumber skipped: needs room for %d temporary copies", printer, len(owned))
+        return False
+
+    ordered = sorted(owned, key=lambda o: sort_key(o[1]["name"], o[0]))
+    log.info("printer=%s renumber: re-adding %d entries in name order", printer, len(ordered))
+    for _, rec, _ in ordered:
+        rec["rebuild"] = True
+    save(records)
+
+    before = set(ids)
+    error = None
+    for email, rec, _ in ordered:
+        try:
+            client.add_entry(desired(users[email]).add_props())
+        except RicohError as e:
+            error = f"adding a copy for {email} failed: {e}"
+            break
+    if error is None:
+        new_ids, _ = client.search_ids()
+        new = [e for e in client.get_entries([i for i in new_ids if i not in before])]
+        mapping: dict[str, int] = {}
+        for email, rec, _ in ordered:
+            match = next((e for e in new if e.email == email and e.name == rec["name"]
+                          and e.id not in mapping.values()), None)
+            if match is None:
+                error = f"the copy for {email} was not found"
+                break
+            mapping[email] = match.id
+    if error is not None:
+        # Undo: remove the copies made so far; the old entries were never touched.
+        log.error("printer=%s renumber stopped: %s; removing the copies", printer, error)
+        try:
+            new_ids, _ = client.search_ids()
+            copies = [e.id for e in client.get_entries([i for i in new_ids if i not in before])
+                      if any(e.email == email and e.name == rec["name"] for email, rec, _ in ordered)]
+            if copies:
+                client.delete_entries(copies)
+            for _, rec, _ in ordered:
+                rec.pop("rebuild", None)
+            save(records)
+        except RicohError as e:
+            log.error("printer=%s could not remove the copies (%s); the next run will", printer, e)
+        return False
+
+    for email, rec, old in ordered:
+        rec["retire"] = [old.id]
+        rec["id"] = mapping[email]
+    save(records)
+    try:
+        for start in range(0, len(ordered), 50):
+            client.delete_entries([old.id for _, _, old in ordered[start:start + 50]])
+    except RicohError as e:
+        log.error("printer=%s renumber: deleting the old copies failed (%s); the next run will finish it", printer, e)
+        return False
+    now = _now()
+    for _, rec, _ in ordered:
+        rec.pop("retire", None)
+        rec.pop("rebuild", None)
+        rec["synced_at"] = now
+    save(records)
+    action(printer, "renumber", "*", "ok", entries=len(ordered))
+    return True

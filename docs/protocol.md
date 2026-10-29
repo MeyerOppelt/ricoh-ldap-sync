@@ -127,6 +127,14 @@ entry needs at least one tab to appear on the panel. The sync writes only the
 Title1 tab for the first letter of the name, ignoring accents. Names with no
 letter A–Z get Frequent.
 
+## Registration numbers and display order
+
+`index` is the registration number. The printer chooses it when an entry is
+added. Panels list entries within a tab by display priority, then by
+registration number. A new entry therefore appears after the existing ones,
+whatever its name. This is why `KEEP_SORTED` adds entries in name order and,
+when needed, re-adds them rather than trying to set `index` directly.
+
 ## Known model differences
 
 - Some newer models refuse `putObjects` with `UDIRECTORY_PERMISSION_DENIED`
