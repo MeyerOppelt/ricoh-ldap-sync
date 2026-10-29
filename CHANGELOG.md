@@ -28,6 +28,8 @@ on your printer with the probe before setting `DRY_RUN=false`.
 ### Changed
 
 - The healthcheck now also fails until the first successful run.
+- Base image moved to Python 3.15 (`python:3.15.0-slim-trixie`). Tests run on
+  3.15 in CI to match.
 
 ## 0.0.2 - 2026-10-28
 

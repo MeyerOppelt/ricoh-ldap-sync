@@ -541,7 +541,7 @@ issue with the result.
 ## Development
 
 ```bash
-python3.12 -m venv .venv && . .venv/bin/activate
+python3.15 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 pytest
 docker build -t ricoh-ldap-sync:dev .

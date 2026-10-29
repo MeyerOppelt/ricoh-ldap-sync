@@ -2,7 +2,7 @@
 name = "ricoh-ldap-sync"
 version = "0.0.3"
 description = "Keep Ricoh printer address books in sync with an LDAP directory"
-requires-python = ">=3.12"
+requires-python = ">=3.15"
 license = "MIT"
 
 [tool.pytest.ini_options]
