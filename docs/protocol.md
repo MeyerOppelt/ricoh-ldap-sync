@@ -100,7 +100,7 @@ by email and name, because the response doesn't reliably return the ID.
 | `index` | Registration number shown in Web Image Monitor | |
 | `entryType` | `user` for a person (groups use other values) | `user` |
 | `name` | Name. Up to 20 characters. | display name, truncated |
-| `longName` | Key display, shown on the panel's buttons. Up to 16 characters. | display name, truncated |
+| `longName` | Key display, shown on the panel's buttons. Up to 16 characters. | button label: an optional `(TAG) ` then the name, shortened to fit |
 | `displayedOrder` | Display priority, 1–10 | `5` |
 | `tagId` | Index tabs, comma-separated (see below) | Title1 tab |
 | `mail:` | `true` if the entry has an email destination | `true` |
@@ -132,9 +132,9 @@ letter A–Z get Frequent.
 `index` is the registration number. The printer chooses it when an entry is
 added. Panels list entries within a tab by display priority, then by
 registration number. A new entry therefore appears after the existing ones,
-whatever its name. This is why `KEEP_SORTED` adds entries in name order and,
-when needed, deletes and re-adds them, rather than trying to set `index`
-directly. Printers seen so far number a new entry after the highest one in
+whatever its name. This is why the sync adds entries in its own order (by
+company, then by name) and, with `KEEP_SORTED`, deletes and re-adds them when
+they drift, rather than trying to set `index` directly. Printers seen so far number a new entry after the highest one in
 use. So copying entries before deleting the originals pushes the numbers up
 with every renumber, while deleting first lets them start again from the
 bottom.

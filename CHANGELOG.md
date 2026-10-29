@@ -4,6 +4,13 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation brought up to date with 0.6.0: how a run works, safety rules,
+  button labels, ordering, guest addresses, troubleshooting and tested
+  printers.
+- Test data and documentation examples use only made-up names and companies.
+
 ## 0.6.0 - 2026-10-29
 
 ### Changed
@@ -29,7 +36,7 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 ### Added
 
 - `LDAP_ATTR_EXTERNAL` tags external users' button labels with `EXTERNAL_TAG`
-  (default `EXT`), for example `Brad W. (EXT)`. The Name field keeps their
+  (default `EXT`), for example `Tomas L. (EXT)`. The Name field keeps their
   full display name. With AzureAD-LDAP-wrapper, use `AzureADuserExternal`,
   which the wrapper already provides, so no customizer is needed. A user whose
   mail was a guest UPN also counts as external. If company tags are also on,
@@ -204,7 +211,3 @@ Pre-release for connectivity testing. No address book sync yet.
 - LDAP reader with certificate validation against `LDAP_TLS_NAME`.
 - `python -m ricoh_ldap_sync.check`: read-only connectivity check for the
   tailnet, printers and LDAP.
-
-## 0.1.0
-
-First release with address book sync. Not released yet.

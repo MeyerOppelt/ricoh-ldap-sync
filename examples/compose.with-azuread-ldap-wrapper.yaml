@@ -65,8 +65,9 @@ services:
       TS_HOSTNAME: ${SYNC_TS_HOSTNAME:-ricoh-ldap-sync}
       DRY_RUN: ${SYNC_DRY_RUN:-true}
       KEEP_SORTED: ${SYNC_KEEP_SORTED:-false}
-      # Tag external (guest) users' button labels, e.g. "(EXT) Brad W.".
-      LDAP_ATTR_EXTERNAL: ${SYNC_LDAP_ATTR_EXTERNAL:-AzureADuserExternal}
+      # Optional: tag external (guest) users "(EXT) Tomas L." instead of with
+      # their company. Set to AzureADuserExternal to turn it on.
+      LDAP_ATTR_EXTERNAL: ${SYNC_LDAP_ATTR_EXTERNAL:-}
       EXTERNAL_TAG: ${SYNC_EXTERNAL_TAG:-EXT}
       # Company tag on the panel's button label; needs ldap_customizer.js above.
       LDAP_ATTR_COMPANY: ${SYNC_LDAP_ATTR_COMPANY:-company}

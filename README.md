@@ -74,18 +74,29 @@ deploy with `DRY_RUN=true` (the default), check the plan in the logs, run the
 
 Each run:
 
-1. Reads users from LDAP: `LDAP_BASE`, `LDAP_FILTER`. The display name is the
+1. Reads users from LDAP (`LDAP_BASE`, `LDAP_FILTER`). The display name is the
    first of `LDAP_ATTR_NAME` that has a value. Emails are compared lowercased.
+   Entries without a usable email address are skipped. A guest's `#EXT#` user
+   principal name is turned back into their real address (see
+   [External (guest) users](#external-guest-users)).
 2. For each printer, opens an address book session, reads the entries, and
    works out the changes:
-   - **Add** each user without an entry: name, key display, the Title1 index tag
-     for the first letter, and the email as a scan-to-email destination. Not a
-     sender, no folder, no fax.
-   - **Update** entries whose user's display name changed in LDAP.
-   - **Delete** entries whose user is no longer in LDAP.
+   - **Add** each user without an entry. The entry gets:
+     - the name and a button label (the key display),
+     - the Title1 index tab for the first letter of their name,
+     - the email as a scan-to-email destination (not a sender, no folder, no fax).
+
+     New entries are added in the sync's [order](#keeping-entries-in-order).
+   - **Update** entries whose name or button label changed, for example a
+     renamed user or a new company tag.
+   - **Delete** entries whose user is no longer in LDAP, unless the
+     [safety brake](#safety) holds them back.
+   - With `KEEP_SORTED`, **renumber** the sync's entries if they're out of order.
 3. Closes the session in every case, even after an error. Sessions use a short
    time limit, because an open session can lock the address book on the panel.
-4. Writes `/data/last_success`, which the container healthcheck reads.
+4. If the run succeeded, writes `/data/last_success`, which the container
+   healthcheck reads. A run succeeds when LDAP was read, every printer synced,
+   and the safety brake held nothing back.
 
 Printers sync independently: one failing doesn't block the others. When a
 printer's address book is full, adds stop and an error is logged.
@@ -96,7 +107,9 @@ The sync's order is by **company, then by person**: each company's people are
 together, companies are in alphabetical order of their full name, and people
 are alphabetical within their company. People without a company come first,
 ordered by name. Without `LDAP_ATTR_COMPANY`, nobody has a company, so the
-order is simply alphabetical by name. Case and accents are ignored.
+order is simply alphabetical by name. Case and accents are ignored. The A–Z
+index tabs still follow each person's first name, so within a tab people
+appear grouped by company.
 
 The printer lists entries by registration number, and gives each new entry the
 next free number. So someone who joins later appears at the end, not in their
@@ -152,7 +165,7 @@ Microsoft Entra guests have a UPN like
 
 **Tagging external users.** Set `LDAP_ATTR_EXTERNAL` to an attribute that is
 `1` (or `true`) for external users, and their button label gets a tag:
-`(EXT) Brad W.`. The Name field keeps their full display name. With
+`(EXT) Tomas L.`. The Name field keeps their full display name. With
 AzureAD-LDAP-wrapper, use `LDAP_ATTR_EXTERNAL=AzureADuserExternal`; the wrapper
 already sets it to `1` for guests and `0` for members, so it needs no
 customizer. Someone whose `mail` was a guest UPN also counts as external.
@@ -194,17 +207,24 @@ first 4 characters of the company name, as in `(Exam) Alice A.` for
    log shows `ldap_customizer loaded`. Re-encode the file whenever it changes.
 2. **Turn it on in the sync:** set `LDAP_ATTR_COMPANY=company`.
 3. **Override tags (optional):** each company's tag is the first 4
-   characters of its name ("VC Interiors" gives `VC I`). To choose a different
+   characters of its name ("NW Traders" gives `NW T`). To choose a different
    tag for some companies, set for example
    `COMPANY_TAGS={"Example Holdings":"EH","Northwind Traders":"NT"}`. Names
    match ignoring case, and any company not listed keeps its first 4
    characters. People with no company get no tag.
 
-The tag comes first, so a company's people sit together when the panel sorts
-by display name. After the tag comes the full name if it fits, otherwise
-"First L.", otherwise the first name cut to fit. Turning this on, or changing a
-company or tag, updates the affected entries on the next run. With
-`KEEP_SORTED`, that run may also renumber.
+The label is 16 characters. The tag comes first, so a company's people sit
+together when the panel sorts by display name. The tag, its brackets and a
+space take 5 to 7 characters, which leaves 9 to 11 for the name. The name
+part is the first of these that fits:
+
+1. the full name, as in `(NWT) Nora Wells`;
+2. the first name and last initial, as in `(NWT) Victor H.`;
+3. the first name, cut to fit if needed, as in `(NWT) Josephine`.
+
+Turning this on, or changing a company or tag, updates the affected entries on
+the next run. People are also [ordered](#keeping-entries-in-order) by company,
+so with `KEEP_SORTED` that run may renumber too.
 
 ## Safety
 
@@ -212,9 +232,9 @@ The sync is built so that a misconfiguration or outage leaves the printer
 alone rather than emptying it.
 
 - **It only touches entries it created.** Every entry it creates is recorded in
-  `/data/state.json` (printer, email, entry ID, name written, last sync). It only
-  ever updates or deletes entries listed there. Entries people created by hand
-  are never changed.
+  `/data/state.json`: printer, email, entry ID, the name and button label
+  written, and when it last synced. It only ever updates or deletes entries
+  listed there. Entries people created by hand are never changed.
 - **No duplicates of manual entries.** If a hand-made entry already has a user's
   email, the sync leaves it alone, doesn't add a second one, and logs one
   warning per run.
@@ -227,7 +247,11 @@ alone rather than emptying it.
 - **Safety brake.** For a printer, all deletes are skipped and an error is
   logged if LDAP returned 0 users, or if the deletes would remove more than
   `MAX_DELETE_FRACTION` (default `0.3`) of that printer's managed entries. Adds
-  and updates still go ahead.
+  and updates still go ahead. The run counts as failed, so the healthcheck
+  reports it until someone looks.
+- **Scans only go to real mailboxes.** A `mail` value that isn't an email
+  address (for example `null`) is skipped. A guest's user principal name is
+  turned back into their real address, or skipped if that isn't possible.
 - **Dry run by default.** With `DRY_RUN=true` (the default) the worker logs the
   plan (adds, updates and deletes for each printer) and writes nothing.
 
@@ -611,11 +635,13 @@ and get restarted, if `tailscaled` or the worker stops.
 immediately, for example after changing the directory:
 
 ```bash
-docker exec <container> python -m ricoh_ldap_sync --once            # follows DRY_RUN
-docker exec <container> python -m ricoh_ldap_sync --once --dry-run  # never writes
+docker exec <container> python -m ricoh_ldap_sync --once             # follows DRY_RUN
+docker exec <container> python -m ricoh_ldap_sync --once --dry-run   # never writes
+docker exec <container> python -m ricoh_ldap_sync --once --renumber  # also renumber from the lowest free number
 ```
 
-The exit code is 0 if LDAP and every printer succeeded. A lock in `/data`
+The exit code is 0 if the run succeeded: LDAP was read, every printer synced,
+and the safety brake held nothing back. A lock in `/data`
 makes a manual run wait for a scheduled run in progress, and the other way
 round, so two runs never overlap.
 
@@ -678,6 +704,8 @@ printers. Delete them in Web Image Monitor if you no longer want them.
 | `safety brake: N of M managed entries would be deleted` | More deletes than `MAX_DELETE_FRACTION` allows. If they're right, see [Approve deletes blocked by the safety brake](#operations). If not, check `LDAP_FILTER` and the directory's group membership. |
 | `safety brake: LDAP returned 0 users` | The filter or base matches nobody, or the directory was emptied. Nothing is deleted until users come back. The line before it, `ldap: no usable users under ... matching ...`, shows the base and filter used. Entries need an email address and a name attribute to count. |
 | `ldap: skipping ...: mail 'null' is not an email address` | That directory account has no email address. It isn't added to the printer. |
+| `ldap: ...: using the guest's real address ... instead of ...#EXT#...` | Information only. A guest's user principal name was in `mail`, and the sync used their real address instead. |
+| `ldap: skipping ...: mail is a guest user principal name with no recoverable address` | A guest's `mail` holds a user principal name the sync can't turn back into an address. Fix the guest's email in your directory. |
 | `action=skip ... a manually created entry already has this email` | Someone added this person by hand. Delete that entry in Web Image Monitor if you want the sync to manage them. It's added on the next run. |
 | `run finished with errors` every run, container unhealthy | Look for the `ERROR` line above it: a printer that's off or unreachable, LDAP down, or a refused write. |
 | `renumber stopped: deleting failed` | The printer refused the delete. Nothing was re-added, and everyone keeps their entry. The next run tries again. |
@@ -705,7 +733,7 @@ The container holds each printer's admin password, the LDAP bind password, and
 
 | Model | Firmware | Result |
 | --- | --- | --- |
-| Ricoh IM C2510 | as found | Connectivity and Web Image Monitor verified. Address book reads and writes not yet confirmed: run the probe. |
+| Ricoh IM C2510 | as found | Works: reads, adds, label updates, deletes and renumbering, in production on two printers since 0.1.0. After a renumber, numbering starts again from the lowest free number. |
 
 **Known risk:** some newer Ricoh models reject address book writes over SOAP
 (`putObjects`) with `UDIRECTORY_PERMISSION_DENIED`, while deletes still work.

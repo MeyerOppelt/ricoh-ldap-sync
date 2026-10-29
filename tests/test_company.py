@@ -56,7 +56,7 @@ def test_bad_company_tags(raw, fragment):
     ("Contoso", "Cont"),
     ("ACME", "ACME"),
     ("Oak", "Oak"),                        # shorter than 4
-    ("VC Interiors", "VC I"),
+    ("NW Traders", "NW T"),
     ("Ab  Cd", "Ab C"),                    # runs of spaces collapse first
     ("Ab Cdef", "Ab C"),
     ("", ""),
@@ -105,15 +105,15 @@ def test_search_requests_company_attribute():
 
 @pytest.mark.parametrize("name, tag, label", [
     ("Alice Anders", "", "Alice Anders"),
-    ("Carley Goetschius", "", "Carley Goetschiu"),          # unchanged behaviour without a tag
+    ("Harriet Oakenshaw", "", "Harriet Oakensha"),          # unchanged behaviour without a tag
     ("Alice Anders", "EH", "(EH) Alice A."),                # "(EH) Alice Anders" is 17 characters
     ("Bob Brown", "EH", "(EH) Bob Brown"),
-    ("Carley Goetschius", "VCI", "(VCI) Carley G."),
-    ("Accounting Veldhouse", "VC", "(VC) Accounting"),      # "Accounting V." doesn't fit either
-    ("Blacktie", "VC", "(VC) Blacktie"),
+    ("Harriet Oakenshaw", "NWT", "(NWT) Harriet O."),
+    ("Accounting Westfield", "VC", "(VC) Accounting"),      # "Accounting V." doesn't fit either
+    ("Reception", "VC", "(VC) Reception"),
     ("Maximiliano Fitzgerald-Montgomery", "NTI", "(NTI) Maximilian"),
-    ("Alice Anders", "Veld", "(Veld) Alice A."),
-    ("Carley Goetschius", "Veld", "(Veld) Carley G."),
+    ("Alice Anders", "Exam", "(Exam) Alice A."),
+    ("Harriet Oakenshaw", "Exam", "(Exam) Harriet"),           # "Harriet O." doesn't fit next to a 4-letter tag
 ])
 def test_key_display(name, tag, label):
     # The tag leads, so labels for one company sit together when the panel sorts by display name.
@@ -122,9 +122,9 @@ def test_key_display(name, tag, label):
 
 
 def test_name_field_keeps_full_name():
-    d = sync.desired(User("carley@example.com", "Carley Goetschius", tag="VCI"))
-    assert d.name == "Carley Goetschius" and d.key_display == "(VCI) Carley G."
-    assert dict(d.add_props())["longName"] == "(VCI) Carley G."
+    d = sync.desired(User("harriet@example.com", "Harriet Oakenshaw", tag="NWT"))
+    assert d.name == "Harriet Oakenshaw" and d.key_display == "(NWT) Harriet O."
+    assert dict(d.add_props())["longName"] == "(NWT) Harriet O."
 
 
 # -- planning and applying -----------------------------------------------------
@@ -212,8 +212,8 @@ def test_fraction_brake_still_lists_each_blocked_delete(caplog):
 # -- guest addresses -----------------------------------------------------------
 
 @pytest.mark.parametrize("upn, address", [
-    ("brad_partner.example#EXT#@tenant.onmicrosoft.com", "brad@partner.example"),
-    ("Brad_Partner.Example#EXT#@Tenant.onmicrosoft.com", "brad@partner.example"),
+    ("tomas_partner.example#EXT#@tenant.onmicrosoft.com", "tomas@partner.example"),
+    ("Tomas_Partner.Example#EXT#@Tenant.onmicrosoft.com", "tomas@partner.example"),
     ("first_last_partner.example#EXT#@tenant.onmicrosoft.com", "first_last@partner.example"),
     ("first.last_sub.partner.example#ext#@tenant.onmicrosoft.com", "first.last@sub.partner.example"),
     ("nounderscore#EXT#@tenant.onmicrosoft.com", ""),
@@ -226,11 +226,11 @@ def test_guest_address(upn, address):
 def test_guest_upn_in_mail_becomes_real_address(caplog):
     with caplog.at_level(logging.INFO):
         users = ldap_source.to_users([
-            {"displayName": ["Brad Walle"], "mail": ["brad_partner.example#EXT#@tenant.onmicrosoft.com"]},
+            {"displayName": ["Tomas Lindqvist"], "mail": ["tomas_partner.example#EXT#@tenant.onmicrosoft.com"]},
             {"displayName": ["Gus Guest"], "mail": ["gus@partner.example"]},
         ], cfg())
-    assert [u.email for u in users] == ["brad@partner.example", "gus@partner.example"]
-    assert "using the guest's real address brad@partner.example" in caplog.text
+    assert [u.email for u in users] == ["gus@partner.example", "tomas@partner.example"]
+    assert "using the guest's real address tomas@partner.example" in caplog.text
 
 
 def test_unrecoverable_guest_upn_is_skipped(caplog):
@@ -241,10 +241,10 @@ def test_unrecoverable_guest_upn_is_skipped(caplog):
 
 def test_guest_upn_and_real_address_are_the_same_person():
     users = ldap_source.to_users([
-        {"cn": ["Brad Walle"], "mail": ["brad@partner.example"]},
-        {"cn": ["Brad Walle"], "mail": ["brad_partner.example#EXT#@tenant.onmicrosoft.com"]},
+        {"cn": ["Tomas Lindqvist"], "mail": ["tomas@partner.example"]},
+        {"cn": ["Tomas Lindqvist"], "mail": ["tomas_partner.example#EXT#@tenant.onmicrosoft.com"]},
     ], cfg())
-    assert [u.email for u in users] == ["brad@partner.example"]
+    assert [u.email for u in users] == ["tomas@partner.example"]
 
 
 # -- external users --------------------------------------------------------------
@@ -252,35 +252,35 @@ def test_guest_upn_and_real_address_are_the_same_person():
 def test_external_tag_off_by_default():
     c = cfg()
     assert c.ldap_attr_external == "" and c.external_tag == "EXT"
-    users = ldap_source.to_users([{"cn": ["Brad Walle"], "mail": ["brad@partner.example"], "AzureADuserExternal": ["1"]}], c)
+    users = ldap_source.to_users([{"cn": ["Tomas Lindqvist"], "mail": ["tomas@partner.example"], "AzureADuserExternal": ["1"]}], c)
     assert users[0].tag == ""
 
 
 def test_external_users_get_ext_tag_and_members_none():
     c = cfg(LDAP_ATTR_EXTERNAL="AzureADuserExternal")
     users = ldap_source.to_users([
-        {"displayName": ["Brad Vande Walle"], "mail": ["brad@partner.example"], "AzureADuserExternal": ["1"]},
+        {"displayName": ["Tomas Lindqvist"], "mail": ["tomas@partner.example"], "AzureADuserExternal": ["1"]},
         {"displayName": ["Alice Anders"], "mail": ["alice@example.com"], "AzureADuserExternal": ["0"]},
         {"displayName": ["Carl Case"], "mail": ["carl@example.com"]},
     ], c)
-    assert {u.email: u.tag for u in users} == {"brad@partner.example": "EXT", "alice@example.com": "", "carl@example.com": ""}
-    brad = next(u for u in users if u.tag)
-    assert sync.desired(brad).key_display == "(EXT) Brad W." and sync.desired(brad).name == "Brad Vande Walle"
+    assert {u.email: u.tag for u in users} == {"tomas@partner.example": "EXT", "alice@example.com": "", "carl@example.com": ""}
+    guest_user = next(u for u in users if u.tag)
+    assert sync.desired(guest_user).key_display == "(EXT) Tomas L." and sync.desired(guest_user).name == "Tomas Lindqvist"
 
 
 def test_guest_upn_marks_user_external():
     c = cfg(LDAP_ATTR_EXTERNAL="AzureADuserExternal")
-    users = ldap_source.to_users([{"cn": ["Brad Walle"], "mail": ["brad_partner.example#EXT#@tenant.onmicrosoft.com"]}], c)
-    assert (users[0].email, users[0].tag) == ("brad@partner.example", "EXT")
+    users = ldap_source.to_users([{"cn": ["Tomas Lindqvist"], "mail": ["tomas_partner.example#EXT#@tenant.onmicrosoft.com"]}], c)
+    assert (users[0].email, users[0].tag) == ("tomas@partner.example", "EXT")
 
 
 def test_external_tag_wins_over_company_and_is_configurable():
     c = cfg(LDAP_ATTR_EXTERNAL="AzureADuserExternal", EXTERNAL_TAG="Guest", LDAP_ATTR_COMPANY="company")
     users = ldap_source.to_users([
-        {"cn": ["Brad Walle"], "mail": ["brad@partner.example"], "AzureADuserExternal": ["true"], "company": ["Partner Co"]},
+        {"cn": ["Tomas Lindqvist"], "mail": ["tomas@partner.example"], "AzureADuserExternal": ["true"], "company": ["Partner Co"]},
         {"cn": ["Alice Anders"], "mail": ["alice@example.com"], "AzureADuserExternal": ["0"], "company": ["Example Holdings"]},
     ], c)
-    assert {u.email: u.tag for u in users} == {"brad@partner.example": "Guest", "alice@example.com": "Exam"}
+    assert {u.email: u.tag for u in users} == {"tomas@partner.example": "Guest", "alice@example.com": "Exam"}
 
 
 def test_external_tag_too_long():
