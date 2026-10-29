@@ -2,7 +2,7 @@
 # environment or a secrets manager, never in this file.
 services:
   ricoh-ldap-sync:
-    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.0
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.1
     restart: unless-stopped
     environment:
       LDAP_URL: ${LDAP_URL:-ldaps://ldap.example.com:636}

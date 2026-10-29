@@ -131,6 +131,26 @@ Things to know before turning it on:
 - **Check your panel's sort setting first.** Some panels can sort by display
   name. If yours does, you may not need `KEEP_SORTED` at all.
 
+### External (guest) users
+
+Scans go to each person's `mail` attribute, never their user principal name.
+Microsoft Entra guests have a UPN like
+`user_partner.example#EXT#@tenant.onmicrosoft.com`, which can't receive mail:
+
+- **If a guest's UPN turns up as their `mail`,** the sync turns it back into
+  the real address (`user@partner.example`) and logs that it did. If that isn't
+  possible, it skips the person rather than send scans to a dead address.
+- **If a guest's Entra `mail` is empty,**
+  [`examples/azuread-ldap-wrapper/ldap_customizer.js`](examples/azuread-ldap-wrapper/ldap_customizer.js)
+  makes AzureAD-LDAP-wrapper use their address from `otherMails` instead.
+
+To include guests at all with AzureAD-LDAP-wrapper:
+
+1. Set its `GRAPH_FILTER_USERS` to `userType eq 'Member' or userType eq 'Guest'`.
+2. Make the guests direct members of a group in `LDAP_USERS_SYNCONLYINGROUP`.
+3. Have them accept their invitation. The wrapper skips guests who haven't,
+   and guests with personal Microsoft accounts.
+
 ### Showing each person's company
 
 The address book has no company field, but the panel's button label (the
@@ -346,7 +366,7 @@ docker compose logs -f ricoh-ldap-sync
 ```
 
 Always reference an exact image version, e.g.
-`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.0`, never `latest`. That way an
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.1`, never `latest`. That way an
 upgrade happens only when you change the tag.
 
 #### Coolify

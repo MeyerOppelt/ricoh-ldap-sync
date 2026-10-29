@@ -38,6 +38,21 @@ class User:
     tag: str = ""  # short company tag for the panel's button label, "" for none
 
 
+def guest_address(upn: str) -> str:
+    """The real address behind an Entra guest UPN, or "" if it can't be recovered.
+
+    Entra writes a guest's address user@partner.example as
+    user_partner.example#EXT#@tenant.onmicrosoft.com. Domains can't contain "_",
+    so the last "_" before #EXT# is where the "@" was.
+    """
+    local = re.split("#ext#", upn, maxsplit=1, flags=re.IGNORECASE)[0]
+    if "_" not in local:
+        return ""
+    user, domain = local.rsplit("_", 1)
+    address = f"{user}@{domain}".lower()
+    return address if _EMAIL.match(address) else ""
+
+
 def company_tag(company: str, tags: dict[str, str]) -> str:
     """Short tag for a company: from COMPANY_TAGS (case-insensitive), else its initials."""
     company = " ".join(company.split())
@@ -122,6 +137,16 @@ def to_users(entries: list[dict[str, list[str]]], cfg: Config) -> list[User]:
         mails = lower.get(cfg.ldap_attr_mail.lower()) or []
         email = mails[0].strip().lower() if mails else ""
         name = next((v[0].strip() for a in cfg.ldap_attr_name if (v := lower.get(a.lower())) and v[0].strip()), "")
+        if "#ext#" in email:
+            # A guest's user principal name, not a mailbox: scans would never arrive.
+            real = guest_address(email)
+            if real:
+                log.info("ldap: %s: using the guest's real address %s instead of %s", name or "entry", real, email)
+            email = real
+            if not email:
+                log.warning("ldap: skipping %s: mail is a guest user principal name with no recoverable address",
+                            name or "entry")
+                continue
         if email and not _EMAIL.match(email):
             log.warning("ldap: skipping %s: mail %r is not an email address", name or "entry", email)
             continue

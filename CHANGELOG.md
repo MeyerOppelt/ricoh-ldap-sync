@@ -4,6 +4,17 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.4.1 - 2026-10-29
+
+### Fixed
+
+- A guest's user principal name (`user_partner.example#EXT#@tenant...`) found
+  in `mail` is turned back into their real address (`user@partner.example`)
+  instead of being used as a destination. If the address can't be recovered,
+  the person is skipped.
+- `examples/azuread-ldap-wrapper/ldap_customizer.js` uses a guest's
+  `otherMails` address when their Entra `mail` is empty.
+
 ## 0.4.0 - 2026-10-29
 
 ### Added

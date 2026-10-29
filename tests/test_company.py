@@ -199,3 +199,41 @@ def test_fraction_brake_still_lists_each_blocked_delete(caplog):
     with caplog.at_level(logging.INFO):
         ok, _ = run(printer, users[:1], records, max_delete_fraction=0.3)
     assert not ok and caplog.text.count("blocked by safety brake") == 3
+
+
+# -- guest addresses -----------------------------------------------------------
+
+@pytest.mark.parametrize("upn, address", [
+    ("brad_partner.example#EXT#@tenant.onmicrosoft.com", "brad@partner.example"),
+    ("Brad_Partner.Example#EXT#@Tenant.onmicrosoft.com", "brad@partner.example"),
+    ("first_last_partner.example#EXT#@tenant.onmicrosoft.com", "first_last@partner.example"),
+    ("first.last_sub.partner.example#ext#@tenant.onmicrosoft.com", "first.last@sub.partner.example"),
+    ("nounderscore#EXT#@tenant.onmicrosoft.com", ""),
+    ("brad_nodot#EXT#@tenant.onmicrosoft.com", ""),
+])
+def test_guest_address(upn, address):
+    assert ldap_source.guest_address(upn) == address
+
+
+def test_guest_upn_in_mail_becomes_real_address(caplog):
+    with caplog.at_level(logging.INFO):
+        users = ldap_source.to_users([
+            {"displayName": ["Brad Walle"], "mail": ["brad_partner.example#EXT#@tenant.onmicrosoft.com"]},
+            {"displayName": ["Gus Guest"], "mail": ["gus@partner.example"]},
+        ], cfg())
+    assert [u.email for u in users] == ["brad@partner.example", "gus@partner.example"]
+    assert "using the guest's real address brad@partner.example" in caplog.text
+
+
+def test_unrecoverable_guest_upn_is_skipped(caplog):
+    with caplog.at_level(logging.WARNING):
+        users = ldap_source.to_users([{"cn": ["Odd Guest"], "mail": ["odd#EXT#@tenant.onmicrosoft.com"]}], cfg())
+    assert users == [] and "no recoverable address" in caplog.text
+
+
+def test_guest_upn_and_real_address_are_the_same_person():
+    users = ldap_source.to_users([
+        {"cn": ["Brad Walle"], "mail": ["brad@partner.example"]},
+        {"cn": ["Brad Walle"], "mail": ["brad_partner.example#EXT#@tenant.onmicrosoft.com"]},
+    ], cfg())
+    assert [u.email for u in users] == ["brad@partner.example"]
