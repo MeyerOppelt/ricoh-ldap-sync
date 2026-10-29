@@ -72,7 +72,8 @@ def test_to_users_reads_company_when_configured():
         {"displayName": ["Alice Anders"], "mail": ["alice@example.com"], "company": ["Example Holdings"]},
         {"displayName": ["Bob Brown"], "mail": ["bob@example.com"]},
     ], c)
-    assert [(u.email, u.tag) for u in users] == [("alice@example.com", "EH"), ("bob@example.com", "")]
+    assert [(u.email, u.tag, u.company) for u in users] == [("alice@example.com", "EH", "Example Holdings"),
+                                                            ("bob@example.com", "", "")]
 
 
 def test_to_users_ignores_company_when_not_configured():

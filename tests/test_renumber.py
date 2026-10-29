@@ -264,3 +264,75 @@ def test_forced_renumber_in_dry_run_writes_nothing():
     mark = len(printer.calls)
     ok, _ = run(printer, [BEA, CAL], records, force=True, dry_run=True)
     assert ok and writes(printer, mark) == []
+
+
+# -- ordering by company -----------------------------------------------------------
+
+def staff(email, name):
+    return User(email, name)
+
+
+def guest(email, name, company):
+    return User(email, name, tag=company[:4], company=company)
+
+
+COMPANY_USERS = [
+    guest("zed@partner.example", "Zed Zane", "Acme Builders"),
+    guest("amy@other.example", "Amy Allen", "Zenith Bank"),
+    guest("bob@partner.example", "Bob Brown", "Acme Builders"),
+    staff("yan@example.com", "Yan Young"),
+    staff("cal@example.com", "Cal Carter"),
+    guest("dee@third.example", "Dee Dunn", "acme architects"),  # same first 4 letters, different company
+]
+COMPANY_ORDER = ["Cal Carter", "Yan Young",            # no company: first, by name
+                 "Dee Dunn",                           # acme architects
+                 "Bob Brown", "Zed Zane",              # Acme Builders
+                 "Amy Allen"]                          # Zenith Bank
+
+
+@pytest.mark.parametrize("numbering", NUMBERING)
+def test_entries_are_ordered_by_company_then_name(numbering):
+    printer = FakePrinter(numbering=numbering)
+    ok, records = run(printer, COMPANY_USERS, None)
+    assert ok and owned_names_by_number(printer, records) == COMPANY_ORDER
+    assert printer.calls.count("putObjects") == len(COMPANY_USERS)  # added in order, no renumber needed
+
+
+@pytest.mark.parametrize("numbering", NUMBERING)
+def test_name_sorted_list_is_renumbered_into_company_order(numbering):
+    printer = FakePrinter(numbering=numbering)
+    plain = [User(u.email, u.name) for u in COMPANY_USERS]  # as 0.5.1 left it: by name only
+    _, records = run(printer, plain, None)
+    assert owned_names_by_number(printer, records) == sorted(u.name for u in COMPANY_USERS)
+    ok, records = run(printer, COMPANY_USERS, records)
+    assert ok and owned_names_by_number(printer, records) == COMPANY_ORDER
+    assert_consistent(printer, records)
+    mark = len(printer.calls)
+    ok, records = run(printer, COMPANY_USERS, records)
+    assert ok and writes(printer, mark) == []
+
+
+def test_company_change_moves_the_person():
+    printer = FakePrinter()
+    _, records = run(printer, COMPANY_USERS, None)
+    moved = [guest(u.email, u.name, "Zenith Bank") if u.name == "Bob Brown" else u for u in COMPANY_USERS]
+    ok, records = run(printer, moved, records)
+    assert ok
+    assert owned_names_by_number(printer, records) == ["Cal Carter", "Yan Young", "Dee Dunn", "Zed Zane",
+                                                       "Amy Allen", "Bob Brown"]
+    assert_consistent(printer, records)
+
+
+def test_new_person_in_an_earlier_company_triggers_renumber_in_dry_run(caplog):
+    printer = FakePrinter()
+    _, records = run(printer, COMPANY_USERS, None)
+    newcomer = guest("abe@new.example", "Abe Adams", "Acme Builders")
+    with caplog.at_level(logging.INFO):
+        ok, _ = run(printer, COMPANY_USERS + [newcomer], records, dry_run=True)
+    assert ok and "action=renumber" in caplog.text
+
+
+def test_order_key():
+    assert sync.order_key(sync.desired(User("a@example.com", "Émile Zola", company="Éclair Co"))) == \
+        ("eclair co", "emile zola", "a@example.com")
+    assert sync.order_key(sync.desired(User("b@example.com", "Bob"))) == ("", "bob", "b@example.com")

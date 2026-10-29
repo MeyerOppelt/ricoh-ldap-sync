@@ -90,19 +90,25 @@ Each run:
 Printers sync independently: one failing doesn't block the others. When a
 printer's address book is full, adds stop and an error is logged.
 
-### Keeping entries in alphabetical order
+### Keeping entries in order
+
+The sync's order is by **company, then by person**: each company's people are
+together, companies are in alphabetical order of their full name, and people
+are alphabetical within their company. People without a company come first,
+ordered by name. Without `LDAP_ATTR_COMPANY`, nobody has a company, so the
+order is simply alphabetical by name. Case and accents are ignored.
 
 The printer lists entries by registration number, and gives each new entry the
-next free number. So someone who joins later appears at the end of their index
-tab, not in alphabetical position. Each run adds new people in name order, so a
-batch of new entries is always alphabetical. Over time, though, the order drifts.
+next free number. So someone who joins later appears at the end, not in their
+place. Each run adds new people in this order, so a batch of new entries is
+always in order. Over time, though, the order drifts.
 
-With `KEEP_SORTED=true`, the sync keeps its own entries in alphabetical order:
+With `KEEP_SORTED=true`, the sync keeps its own entries in order:
 
 1. After a run's changes, it checks whether its entries' registration numbers
-   follow name order (ignoring case and accents).
+   follow this order.
 2. If they don't, it deletes all of its entries.
-3. It then re-adds them in name order, so the printer numbers them upwards
+3. It then re-adds them in order, so the printer numbers them upwards
    from the lowest free registration number.
 
 Deleting first means the numbers start again from the bottom each time,
@@ -390,7 +396,7 @@ docker compose logs -f ricoh-ldap-sync
 ```
 
 Always reference an exact image version, e.g.
-`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.5.1`, never `latest`. That way an
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.6.0`, never `latest`. That way an
 upgrade happens only when you change the tag.
 
 #### Coolify
@@ -571,7 +577,7 @@ docker exec <container> python -m ricoh_ldap_sync --once --dry-run
 | `TS_HOSTNAME` | no | `ricoh-ldap-sync` | Node name on the tailnet. |
 | `SYNC_INTERVAL_MINUTES` | no | `15` | Minutes between runs. |
 | `DRY_RUN` | no | `true` | `true` logs the plan only. `false` writes to printers. |
-| `KEEP_SORTED` | no | `false` | `true` deletes and re-adds the sync's entries in name order whenever their registration numbers are out of order. See [Keeping entries in alphabetical order](#keeping-entries-in-alphabetical-order). |
+| `KEEP_SORTED` | no | `false` | `true` deletes and re-adds the sync's entries in order (by company, then name) whenever their registration numbers are out of order. See [Keeping entries in order](#keeping-entries-in-order). |
 | `MAX_DELETE_FRACTION` | no | `0.3` | Safety brake threshold, 0 to 1. |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warning` or `error`. |
 

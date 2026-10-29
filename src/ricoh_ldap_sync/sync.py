@@ -67,7 +67,15 @@ def registration_number(entry: Entry) -> int:
     return int(value) if value.isdigit() else entry.id
 
 
-def in_order(positions_and_keys: list[tuple[int, tuple[str, str]]]) -> bool:
+def order_key(d: "Desired") -> tuple[str, str, str]:
+    """Order of entries on the printer: by company name, then by person, ignoring accents and case.
+
+    People without a company sort first. Email breaks ties.
+    """
+    return (sort_key(d.company)[0], sort_key(d.name)[0], d.email)
+
+
+def in_order(positions_and_keys: list[tuple[int, tuple]]) -> bool:
     keys = [key for _, key in sorted(positions_and_keys)]
     return keys == sorted(keys)
 
@@ -82,6 +90,7 @@ class Desired:
     name: str
     key_display: str
     tag: int | None
+    company: str = ""  # only for ordering; not written to the printer
 
     def tag_value(self) -> str:
         # An entry needs at least one tag to show on the panel; fall back to Frequent.
@@ -131,6 +140,7 @@ def desired(user: User) -> Desired:
         name=truncate(user.name, NAME_MAX),
         key_display=key_display(user.name, user.tag),
         tag=title1_tag(user.name),
+        company=user.company,
     )
 
 
@@ -232,7 +242,7 @@ def plan(printer: str, users: list[User], entries: list[Entry], records: Records
                 p.manual.append((user.email, others[0].id))
             continue
         p.adds.append(d)
-    p.adds.sort(key=lambda d: sort_key(d.name, d.email))
+    p.adds.sort(key=order_key)
 
     deletes = [(rec["id"], email, rec.get("name", "")) for email, rec in valid.items() if email not in wanted]
     if deletes:
@@ -253,11 +263,11 @@ def plan(printer: str, users: list[User], entries: list[Entry], records: Records
 
     if keep_sorted:
         deleted = {email for _, email, _ in p.deletes}
-        final = [(registration_number(by_id[rec["id"]]), sort_key(desired(wanted[email]).name, email))
+        final = [(registration_number(by_id[rec["id"]]), order_key(desired(wanted[email])))
                  for email, rec in valid.items() if email in wanted and email not in deleted]
-        final += [(registration_number(by_id[i]), sort_key(d.name, d.email)) for i, d in p.adoptions]
+        final += [(registration_number(by_id[i]), order_key(d)) for i, d in p.adoptions]
         # New entries usually get numbers after the existing ones.
-        final += [(10**9 + n, sort_key(d.name, d.email)) for n, d in enumerate(p.adds)]
+        final += [(10**9 + n, order_key(d)) for n, d in enumerate(p.adds)]
         if not in_order(final):
             p.renumber = len(final)
     return p
@@ -466,11 +476,11 @@ def _renumber(client: RicohClient, printer: str, records: Records, users: dict[s
            for email, rec, _ in owned):
         log.error("printer=%s renumber skipped: an earlier change in this run failed", printer)
         return False
-    if not owned or (not force and in_order([(registration_number(e), sort_key(rec["name"], email))
+    if not owned or (not force and in_order([(registration_number(e), order_key(desired(users[email])))
                                              for email, rec, e in owned])):
         return True
 
-    ordered = sorted(owned, key=lambda o: sort_key(o[1]["name"], o[0]))
+    ordered = sorted(owned, key=lambda o: order_key(desired(users[o[0]])))
     log.info("printer=%s renumber: deleting %d entries and re-adding them in name order", printer, len(ordered))
     # From here until each re-add is confirmed, these people are off the panel.
     # Recording them as unconfirmed adds first means an interrupted run is

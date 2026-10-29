@@ -4,6 +4,17 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.6.0 - 2026-10-29
+
+### Changed
+
+- Entries are ordered by company, then by person. Each company's people sit
+  together, companies in alphabetical order of their full name, people
+  alphabetical within it. People without a company come first. This applies to
+  each batch of adds and to `KEEP_SORTED` renumbering. Without
+  `LDAP_ATTR_COMPANY` the order is unchanged (by name). With `KEEP_SORTED`, the
+  first run after upgrading renumbers once into the new order.
+
 ## 0.5.1 - 2026-10-29
 
 ### Changed

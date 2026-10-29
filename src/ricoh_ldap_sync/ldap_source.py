@@ -36,6 +36,7 @@ class User:
     email: str  # lowercased
     name: str
     tag: str = ""  # short company tag for the panel's button label, "" for none
+    company: str = ""  # full company name, used to order entries; "" for none
 
 
 def guest_address(upn: str) -> str:
@@ -161,13 +162,16 @@ def to_users(entries: list[dict[str, list[str]]], cfg: Config) -> list[User]:
         if email in by_email:
             log.warning("ldap: duplicate email %s, keeping the first entry", email)
             continue
+        company = ""
+        if cfg.ldap_attr_company:
+            companies = lower.get(cfg.ldap_attr_company.lower()) or []
+            company = " ".join((companies[0] if companies else "").split())
         tag = ""
         if cfg.ldap_attr_external and (was_guest_upn or _truthy(lower.get(cfg.ldap_attr_external.lower()))):
             tag = cfg.external_tag
-        elif cfg.ldap_attr_company:
-            companies = lower.get(cfg.ldap_attr_company.lower()) or []
-            tag = company_tag(companies[0] if companies else "", cfg.company_tags)
-        by_email[email] = User(email=email, name=name, tag=tag)
+        elif company:
+            tag = company_tag(company, cfg.company_tags)
+        by_email[email] = User(email=email, name=name, tag=tag, company=company)
     return sorted(by_email.values(), key=lambda u: u.email)
 
 
