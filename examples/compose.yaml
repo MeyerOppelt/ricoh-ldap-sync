@@ -2,7 +2,7 @@
 # environment or a secrets manager, never in this file.
 services:
   ricoh-ldap-sync:
-    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.2
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.5.0
     restart: unless-stopped
     environment:
       LDAP_URL: ${LDAP_URL:-ldaps://ldap.example.com:636}
@@ -20,6 +20,8 @@ services:
       TS_HOSTNAME: ${TS_HOSTNAME:-ricoh-ldap-sync}
       DRY_RUN: ${DRY_RUN:-true}
       KEEP_SORTED: ${KEEP_SORTED:-false}
+      LDAP_ATTR_EXTERNAL: ${LDAP_ATTR_EXTERNAL:-}  # e.g. AzureADuserExternal; external users get EXTERNAL_TAG
+      EXTERNAL_TAG: ${EXTERNAL_TAG:-EXT}
       LDAP_ATTR_COMPANY: ${LDAP_ATTR_COMPANY:-}  # e.g. company
       COMPANY_TAGS: ${COMPANY_TAGS:-}  # optional overrides, e.g. {"Example Holdings":"EH"}; default is the first 4 characters
       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}

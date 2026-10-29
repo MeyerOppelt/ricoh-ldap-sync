@@ -111,7 +111,8 @@ def connect(cfg: Config) -> Connection:
 
 def search(conn: Connection, cfg: Config) -> list[dict[str, list[str]]]:
     """Run the configured search and return each entry's attributes as lists of strings."""
-    attributes = sorted({*cfg.ldap_attr_name, cfg.ldap_attr_mail} | ({cfg.ldap_attr_company} if cfg.ldap_attr_company else set()))
+    attributes = sorted({*cfg.ldap_attr_name, cfg.ldap_attr_mail}
+                        | {a for a in (cfg.ldap_attr_company, cfg.ldap_attr_external) if a})
     try:
         ok = conn.search(cfg.ldap_base, cfg.ldap_filter, attributes=attributes)
     except LDAPException as e:
@@ -140,7 +141,8 @@ def to_users(entries: list[dict[str, list[str]]], cfg: Config) -> list[User]:
         mails = lower.get(cfg.ldap_attr_mail.lower()) or []
         email = mails[0].strip().lower() if mails else ""
         name = next((v[0].strip() for a in cfg.ldap_attr_name if (v := lower.get(a.lower())) and v[0].strip()), "")
-        if "#ext#" in email:
+        was_guest_upn = "#ext#" in email
+        if was_guest_upn:
             # A guest's user principal name, not a mailbox: scans would never arrive.
             real = guest_address(email)
             if real:
@@ -160,11 +162,17 @@ def to_users(entries: list[dict[str, list[str]]], cfg: Config) -> list[User]:
             log.warning("ldap: duplicate email %s, keeping the first entry", email)
             continue
         tag = ""
-        if cfg.ldap_attr_company:
+        if cfg.ldap_attr_external and (was_guest_upn or _truthy(lower.get(cfg.ldap_attr_external.lower()))):
+            tag = cfg.external_tag
+        elif cfg.ldap_attr_company:
             companies = lower.get(cfg.ldap_attr_company.lower()) or []
             tag = company_tag(companies[0] if companies else "", cfg.company_tags)
         by_email[email] = User(email=email, name=name, tag=tag)
     return sorted(by_email.values(), key=lambda u: u.email)
+
+
+def _truthy(values: list[str] | None) -> bool:
+    return bool(values) and values[0].strip().lower() in ("1", "true", "yes")
 
 
 def fetch_users(cfg: Config) -> list[User]:

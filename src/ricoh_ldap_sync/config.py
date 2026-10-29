@@ -61,6 +61,8 @@ class Config:
     ldap_attr_name: tuple[str, ...] = ("displayName", "cn", "uid")
     ldap_attr_mail: str = DEFAULT_ATTR_MAIL
     ldap_attr_company: str = ""
+    ldap_attr_external: str = ""
+    external_tag: str = "EXT"
     company_tags: dict[str, str] = field(default_factory=dict)
     printers: tuple[Printer, ...] = ()
     ricoh_user: str = DEFAULT_RICOH_USER
@@ -133,6 +135,10 @@ def load(env: Mapping[str, str] | None = None) -> Config:
         problems.append("LDAP_ATTR_NAME must list at least one attribute")
     attr_mail = get("LDAP_ATTR_MAIL") or DEFAULT_ATTR_MAIL
     attr_company = get("LDAP_ATTR_COMPANY")
+    attr_external = get("LDAP_ATTR_EXTERNAL")
+    external_tag = get("EXTERNAL_TAG") or "EXT"
+    if len(external_tag) > COMPANY_TAG_MAX:
+        problems.append(f"EXTERNAL_TAG must be 1 to {COMPANY_TAG_MAX} characters")
     company_tags = _company_tags(get("COMPANY_TAGS"), problems)
 
     printers = _printers(env, required("PRINTERS", ' (JSON, e.g. [{"name":"office","host":"192.0.2.10"}])'), problems)
@@ -170,6 +176,8 @@ def load(env: Mapping[str, str] | None = None) -> Config:
         ldap_attr_name=attr_name,
         ldap_attr_mail=attr_mail,
         ldap_attr_company=attr_company,
+        ldap_attr_external=attr_external,
+        external_tag=external_tag,
         company_tags=company_tags,
         printers=printers,
         ricoh_user=ricoh_user,

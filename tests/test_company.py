@@ -243,3 +243,45 @@ def test_guest_upn_and_real_address_are_the_same_person():
         {"cn": ["Brad Walle"], "mail": ["brad_partner.example#EXT#@tenant.onmicrosoft.com"]},
     ], cfg())
     assert [u.email for u in users] == ["brad@partner.example"]
+
+
+# -- external users --------------------------------------------------------------
+
+def test_external_tag_off_by_default():
+    c = cfg()
+    assert c.ldap_attr_external == "" and c.external_tag == "EXT"
+    users = ldap_source.to_users([{"cn": ["Brad Walle"], "mail": ["brad@partner.example"], "AzureADuserExternal": ["1"]}], c)
+    assert users[0].tag == ""
+
+
+def test_external_users_get_ext_tag_and_members_none():
+    c = cfg(LDAP_ATTR_EXTERNAL="AzureADuserExternal")
+    users = ldap_source.to_users([
+        {"displayName": ["Brad Vande Walle"], "mail": ["brad@partner.example"], "AzureADuserExternal": ["1"]},
+        {"displayName": ["Alice Anders"], "mail": ["alice@example.com"], "AzureADuserExternal": ["0"]},
+        {"displayName": ["Carl Case"], "mail": ["carl@example.com"]},
+    ], c)
+    assert {u.email: u.tag for u in users} == {"brad@partner.example": "EXT", "alice@example.com": "", "carl@example.com": ""}
+    brad = next(u for u in users if u.tag)
+    assert sync.desired(brad).key_display == "Brad W. (EXT)" and sync.desired(brad).name == "Brad Vande Walle"
+
+
+def test_guest_upn_marks_user_external():
+    c = cfg(LDAP_ATTR_EXTERNAL="AzureADuserExternal")
+    users = ldap_source.to_users([{"cn": ["Brad Walle"], "mail": ["brad_partner.example#EXT#@tenant.onmicrosoft.com"]}], c)
+    assert (users[0].email, users[0].tag) == ("brad@partner.example", "EXT")
+
+
+def test_external_tag_wins_over_company_and_is_configurable():
+    c = cfg(LDAP_ATTR_EXTERNAL="AzureADuserExternal", EXTERNAL_TAG="Guest", LDAP_ATTR_COMPANY="company")
+    users = ldap_source.to_users([
+        {"cn": ["Brad Walle"], "mail": ["brad@partner.example"], "AzureADuserExternal": ["true"], "company": ["Partner Co"]},
+        {"cn": ["Alice Anders"], "mail": ["alice@example.com"], "AzureADuserExternal": ["0"], "company": ["Example Holdings"]},
+    ], c)
+    assert {u.email: u.tag for u in users} == {"brad@partner.example": "Guest", "alice@example.com": "Exam"}
+
+
+def test_external_tag_too_long():
+    with pytest.raises(config.ConfigError) as e:
+        cfg(EXTERNAL_TAG="EXTERNAL")
+    assert any("EXTERNAL_TAG" in p for p in e.value.problems)

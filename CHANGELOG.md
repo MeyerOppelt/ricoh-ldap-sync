@@ -4,6 +4,17 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.5.0 - 2026-10-29
+
+### Added
+
+- `LDAP_ATTR_EXTERNAL` tags external users' button labels with `EXTERNAL_TAG`
+  (default `EXT`), for example `Brad W. (EXT)`. The Name field keeps their
+  full display name. With AzureAD-LDAP-wrapper, use `AzureADuserExternal`,
+  which the wrapper already provides, so no customizer is needed. A user whose
+  mail was a guest UPN also counts as external. If company tags are also on,
+  external users get the external tag and members get their company tag.
+
 ## 0.4.2 - 2026-10-29
 
 ### Changed

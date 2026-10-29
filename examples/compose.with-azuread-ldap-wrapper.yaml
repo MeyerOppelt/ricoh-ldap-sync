@@ -44,7 +44,7 @@ services:
       start_period: 120s
 
   ricoh-ldap-sync:
-    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.4.2
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.5.0
     restart: unless-stopped
     depends_on:
       ldap:
@@ -65,6 +65,9 @@ services:
       TS_HOSTNAME: ${SYNC_TS_HOSTNAME:-ricoh-ldap-sync}
       DRY_RUN: ${SYNC_DRY_RUN:-true}
       KEEP_SORTED: ${SYNC_KEEP_SORTED:-false}
+      # Tag external (guest) users' button labels, e.g. "Brad W. (EXT)".
+      LDAP_ATTR_EXTERNAL: ${SYNC_LDAP_ATTR_EXTERNAL:-AzureADuserExternal}
+      EXTERNAL_TAG: ${SYNC_EXTERNAL_TAG:-EXT}
       # Company tag on the panel's button label; needs ldap_customizer.js above.
       LDAP_ATTR_COMPANY: ${SYNC_LDAP_ATTR_COMPANY:-company}
       COMPANY_TAGS: ${SYNC_COMPANY_TAGS:-}  # optional overrides, e.g. {"Example Holdings":"EH"}; default is the first 4 characters
