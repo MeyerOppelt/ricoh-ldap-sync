@@ -105,24 +105,25 @@ def test_search_requests_company_attribute():
 @pytest.mark.parametrize("name, tag, label", [
     ("Alice Anders", "", "Alice Anders"),
     ("Carley Goetschius", "", "Carley Goetschiu"),          # unchanged behaviour without a tag
-    ("Alice Anders", "EH", "Alice A. (EH)"),                # "Alice Anders (EH)" is 17 characters
-    ("Bob Brown", "EH", "Bob Brown (EH)"),
-    ("Carley Goetschius", "VCI", "Carley G. (VCI)"),
-    ("Accounting Veldhouse", "VC", "Accounting (VC)"),      # "Accounting V." doesn't fit either
-    ("Blacktie", "VC", "Blacktie (VC)"),
-    ("Maximiliano Fitzgerald-Montgomery", "NTI", "Maximilian (NTI)"),
-    ("Alice Anders", "Veld", "Alice A. (Veld)"),
-    ("Carley Goetschius", "Veld", "Carley G. (Veld)"),
+    ("Alice Anders", "EH", "(EH) Alice A."),                # "(EH) Alice Anders" is 17 characters
+    ("Bob Brown", "EH", "(EH) Bob Brown"),
+    ("Carley Goetschius", "VCI", "(VCI) Carley G."),
+    ("Accounting Veldhouse", "VC", "(VC) Accounting"),      # "Accounting V." doesn't fit either
+    ("Blacktie", "VC", "(VC) Blacktie"),
+    ("Maximiliano Fitzgerald-Montgomery", "NTI", "(NTI) Maximilian"),
+    ("Alice Anders", "Veld", "(Veld) Alice A."),
+    ("Carley Goetschius", "Veld", "(Veld) Carley G."),
 ])
 def test_key_display(name, tag, label):
+    # The tag leads, so labels for one company sit together when the panel sorts by display name.
     out = sync.key_display(name, tag)
     assert out == label and len(out) <= sync.KEY_DISPLAY_MAX
 
 
 def test_name_field_keeps_full_name():
     d = sync.desired(User("carley@example.com", "Carley Goetschius", tag="VCI"))
-    assert d.name == "Carley Goetschius" and d.key_display == "Carley G. (VCI)"
-    assert dict(d.add_props())["longName"] == "Carley G. (VCI)"
+    assert d.name == "Carley Goetschius" and d.key_display == "(VCI) Carley G."
+    assert dict(d.add_props())["longName"] == "(VCI) Carley G."
 
 
 # -- planning and applying -----------------------------------------------------
@@ -143,14 +144,14 @@ def test_new_company_updates_label():
     records = {"bob@example.com": {"id": 1, "name": "Bob Brown", "synced_at": "x"}}
     p = sync.plan("office", [User("bob@example.com", "Bob Brown", tag="EH")], [entry(1, "Bob Brown", "bob@example.com")],
                   records, 1.0)
-    assert [(i, d.key_display) for i, d, _ in p.updates] == [(1, "Bob Brown (EH)")]
+    assert [(i, d.key_display) for i, d, _ in p.updates] == [(1, "(EH) Bob Brown")]
 
 
 def test_adoption_fixes_label():
     p = sync.plan("office", [User("bob@example.com", "Bob Brown", tag="EH")],
                   [entry(1, "Bob Brown", "bob@example.com", long_name="Bob")], None, 1.0)
     assert [(i, d.email) for i, d in p.adoptions] == [(1, "bob@example.com")]
-    assert [(i, d.key_display) for i, d, _ in p.updates] == [(1, "Bob Brown (EH)")]
+    assert [(i, d.key_display) for i, d, _ in p.updates] == [(1, "(EH) Bob Brown")]
 
 
 def run(printer, users, records, **kw):
@@ -170,10 +171,10 @@ def test_live_company_change_relabels_entry():
     printer = FakePrinter()
     _, records = run(printer, [User("bob@example.com", "Bob Brown", tag="EH")], None)
     entry_ = next(iter(printer.entries.values()))
-    assert entry_["longName"] == "Bob Brown (EH)" and entry_["name"] == "Bob Brown"
-    assert records["bob@example.com"]["key_display"] == "Bob Brown (EH)"
+    assert entry_["longName"] == "(EH) Bob Brown" and entry_["name"] == "Bob Brown"
+    assert records["bob@example.com"]["key_display"] == "(EH) Bob Brown"
     ok, records = run(printer, [User("bob@example.com", "Bob Brown", tag="OC")], records)
-    assert ok and next(iter(printer.entries.values()))["longName"] == "Bob Brown (OC)"
+    assert ok and next(iter(printer.entries.values()))["longName"] == "(OC) Bob Brown"
     mark = len(printer.calls)
     ok, records = run(printer, [User("bob@example.com", "Bob Brown", tag="OC")], records)
     assert ok and not [c for c in printer.calls[mark:] if c.startswith("put")]
@@ -263,7 +264,7 @@ def test_external_users_get_ext_tag_and_members_none():
     ], c)
     assert {u.email: u.tag for u in users} == {"brad@partner.example": "EXT", "alice@example.com": "", "carl@example.com": ""}
     brad = next(u for u in users if u.tag)
-    assert sync.desired(brad).key_display == "Brad W. (EXT)" and sync.desired(brad).name == "Brad Vande Walle"
+    assert sync.desired(brad).key_display == "(EXT) Brad W." and sync.desired(brad).name == "Brad Vande Walle"
 
 
 def test_guest_upn_marks_user_external():

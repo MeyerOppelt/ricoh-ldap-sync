@@ -146,7 +146,7 @@ Microsoft Entra guests have a UPN like
 
 **Tagging external users.** Set `LDAP_ATTR_EXTERNAL` to an attribute that is
 `1` (or `true`) for external users, and their button label gets a tag:
-`Brad W. (EXT)`. The Name field keeps their full display name. With
+`(EXT) Brad W.`. The Name field keeps their full display name. With
 AzureAD-LDAP-wrapper, use `LDAP_ATTR_EXTERNAL=AzureADuserExternal`; the wrapper
 already sets it to `1` for guests and `0` for members, so it needs no
 customizer. Someone whose `mail` was a guest UPN also counts as external.
@@ -164,7 +164,7 @@ To include guests at all with AzureAD-LDAP-wrapper:
 
 The address book has no company field, but the panel's button label (the
 *key display*, 16 characters) can carry a short company tag: by default the
-first 4 characters of the company name, as in `Alice A. (Exam)` for
+first 4 characters of the company name, as in `(Exam) Alice A.` for
 "Example Holdings". The Name field keeps the full name.
 
 1. **Get the company into LDAP.** The sync reads it from an LDAP attribute
@@ -194,8 +194,9 @@ first 4 characters of the company name, as in `Alice A. (Exam)` for
    match ignoring case, and any company not listed keeps its first 4
    characters. People with no company get no tag.
 
-The label is the full name if it fits next to the tag, otherwise "First L.",
-otherwise the first name cut to fit. Turning this on, or changing a
+The tag comes first, so a company's people sit together when the panel sorts
+by display name. After the tag comes the full name if it fits, otherwise
+"First L.", otherwise the first name cut to fit. Turning this on, or changing a
 company or tag, updates the affected entries on the next run. With
 `KEEP_SORTED`, that run may also renumber.
 
@@ -389,7 +390,7 @@ docker compose logs -f ricoh-ldap-sync
 ```
 
 Always reference an exact image version, e.g.
-`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.5.0`, never `latest`. That way an
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.5.1`, never `latest`. That way an
 upgrade happens only when you change the tag.
 
 #### Coolify

@@ -105,19 +105,19 @@ class Desired:
 
 
 def key_display(name: str, company_tag: str = "") -> str:
-    """The panel's button label: the name, plus " (TAG)" when there is a company tag.
+    """The panel's button label: the name, led by "(TAG) " when there is a tag.
 
     Shortens the name to fit: the full name, else "First L.", else the first word.
     """
     name = " ".join(name.split())
     if not company_tag:
         return truncate(name, KEY_DISPLAY_MAX)
-    suffix = f" ({company_tag})"
-    room = KEY_DISPLAY_MAX - len(suffix)
+    prefix = f"({company_tag}) "
+    room = KEY_DISPLAY_MAX - len(prefix)
     words = name.split()
     candidates = [name] + ([f"{words[0]} {words[-1][0]}."] if len(words) > 1 else [])
     short = next((c for c in candidates if len(c) <= room), truncate(words[0] if words else "", room))
-    return short + suffix
+    return prefix + short
 
 
 def written_key_display(rec: dict) -> str:

@@ -4,6 +4,15 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.5.1 - 2026-10-29
+
+### Changed
+
+- The tag now comes before the name on the button label: `(EH) Alice A.`
+  instead of `Alice A. (EH)`. A company's people then sit together when the
+  panel sorts by display name. Tagged entries are relabelled on the next run.
+  Names don't change, so nobody is renumbered.
+
 ## 0.5.0 - 2026-10-29
 
 ### Added
