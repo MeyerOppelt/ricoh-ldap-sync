@@ -4,6 +4,20 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## 0.7.0 - 2026-10-30
+
+### Added
+
+- `SOURCE=graph` reads one Microsoft Entra group straight from Microsoft Graph
+  instead of LDAP. Every user in the group gets an entry, including guests who
+  haven't accepted their invitation, guests with personal accounts and
+  disabled accounts, which AzureAD-LDAP-wrapper leaves out. Set
+  `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET` and
+  `GRAPH_GROUP_ID`. Company tags come from each person's Entra Company name.
+  `GRAPH_TAG_GUESTS=true` tags guests with `EXTERNAL_TAG` instead. The
+  connectivity check signs in, finds the group and counts its members.
+  `SOURCE` defaults to `ldap`, so existing deployments are unchanged.
+
 ### Changed
 
 - Documentation brought up to date with 0.6.0: how a run works, safety rules,

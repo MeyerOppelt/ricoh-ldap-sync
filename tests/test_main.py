@@ -127,3 +127,30 @@ def test_renumber_requires_once(monkeypatch):
     for k, v in ENV.items():
         monkeypatch.setenv(k, v)
     assert main.main(["--renumber"]) == 2
+
+
+def test_graph_error_skips_every_printer(monkeypatch, printers, tmp_path):
+    from ricoh_ldap_sync import graph_source
+
+    def fail(cfg):
+        raise graph_source.GraphError("HTTP 403 Authorization_RequestDenied")
+
+    monkeypatch.setattr(graph_source, "fetch_users", fail)
+    cfg = config.load({**{k: v for k, v in ENV.items() if not k.startswith("LDAP_")}, "SOURCE": "graph",
+                       "GRAPH_TENANT_ID": "tenant.example.com", "GRAPH_CLIENT_ID": "app",
+                       "GRAPH_CLIENT_SECRET": "pw", "GRAPH_GROUP_ID": "11111111-2222-3333-4444-555555555555"})
+    assert main.run_once(cfg, str(tmp_path / "state.json")) is False
+    assert all(p.calls == [] for p in printers.values())
+
+
+def test_graph_source_users_reach_the_printers(monkeypatch, printers, tmp_path):
+    from ricoh_ldap_sync import graph_source
+
+    monkeypatch.setattr(graph_source, "fetch_users", lambda cfg: USERS)
+    monkeypatch.setattr(ldap_source, "fetch_users", lambda cfg: pytest.fail("LDAP must not be used"))
+    cfg = config.load({**{k: v for k, v in ENV.items() if not k.startswith("LDAP_")}, "SOURCE": "graph",
+                       "GRAPH_TENANT_ID": "tenant.example.com", "GRAPH_CLIENT_ID": "app",
+                       "GRAPH_CLIENT_SECRET": "pw", "GRAPH_GROUP_ID": "11111111-2222-3333-4444-555555555555"})
+    path = tmp_path / "state.json"
+    assert main.run_once(cfg, str(path)) is True
+    assert set(json.loads(path.read_text())["office"]) == {"alice@example.com", "bob@example.com"}

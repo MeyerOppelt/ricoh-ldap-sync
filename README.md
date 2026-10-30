@@ -179,6 +179,52 @@ To include guests at all with AzureAD-LDAP-wrapper:
 3. Have them accept their invitation. The wrapper skips guests who haven't,
    and guests with personal Microsoft accounts.
 
+To include every guest whatever their invitation or account type, read the
+group from Microsoft Graph instead. See the next section.
+
+### Reading straight from Microsoft Entra
+
+With `SOURCE=graph`, the sync reads the members of one Entra group from
+Microsoft Graph and needs no LDAP server. Every user in the group gets an
+entry, including members of nested groups:
+
+- guests who haven't accepted their invitation yet;
+- guests who signed in with a personal Microsoft, Google or one-time-code
+  account (AzureAD-LDAP-wrapper skips these, because it can't log them in);
+- disabled accounts.
+
+The address book only needs a name and an address, so none of these is a
+reason to leave someone out. Remove people from the group to remove them from
+the printers.
+
+**Address.** The first of these that is an email address: `mail`, then
+`otherMails`, then the user principal name. A guest's `#EXT#` UPN is turned
+back into their real address. A member with none of these is skipped and
+logged.
+
+**Name.** `displayName`, then first and last name, then the address.
+
+**Company.** Each person's Entra **Company name** is always read, and gives
+the button label its [company tag](#showing-each-persons-company). Set
+`GRAPH_TAG_GUESTS=true` to give guests `EXTERNAL_TAG` instead.
+
+**Setup.**
+
+1. In Entra, register an app (or reuse one, such as AzureAD-LDAP-wrapper's).
+   Give it the Microsoft Graph **application** permissions
+   `GroupMember.Read.All` and `User.Read.All`, grant admin consent, and create
+   a client secret.
+2. Set `SOURCE=graph`, `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`,
+   `GRAPH_CLIENT_SECRET` and `GRAPH_GROUP_ID` (the group's **Object ID**). The
+   `LDAP_*` settings are then ignored and not required.
+3. The container needs outbound HTTPS to `login.microsoftonline.com` and
+   `graph.microsoft.com`. That traffic goes directly, not through Tailscale.
+
+See [`examples/compose.graph.yaml`](examples/compose.graph.yaml). Switching an
+existing deployment from LDAP to Graph keeps every entry whose address is
+unchanged, so the first run only adds the people LDAP was leaving out. Check
+it with a dry run first.
+
 ### Showing each person's company
 
 The address book has no company field, but the panel's button label (the
@@ -382,7 +428,9 @@ Tailscale that can reach the printer. Then:
 All settings are environment variables. They're listed in full in the
 [Configuration reference](#configuration-reference). The required ones are
 `LDAP_URL`, `LDAP_BIND_DN`, `LDAP_BIND_PASSWORD`, `LDAP_BASE`, `PRINTERS`, and
-`RICOH_PASSWORD` (or a per-printer `RICOH_PASSWORD_<NAME>`).
+`RICOH_PASSWORD` (or a per-printer `RICOH_PASSWORD_<NAME>`). With
+`SOURCE=graph`, the four `GRAPH_*` settings replace the `LDAP_*` ones (see
+[Reading straight from Microsoft Entra](#reading-straight-from-microsoft-entra)).
 
 `PRINTERS` is a JSON list. Each printer has a `name` and a `host`:
 
@@ -420,7 +468,7 @@ docker compose logs -f ricoh-ldap-sync
 ```
 
 Always reference an exact image version, e.g.
-`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.6.0`, never `latest`. That way an
+`ghcr.io/meyeroppelt/ricoh-ldap-sync:0.7.0`, never `latest`. That way an
 upgrade happens only when you change the tag.
 
 #### Coolify
@@ -580,11 +628,17 @@ docker exec <container> python -m ricoh_ldap_sync --once --dry-run
 
 | Variable | Required | Default | Notes |
 | --- | --- | --- | --- |
-| `LDAP_URL` | yes | | `ldaps://host[:port]` or `ldap://host[:port]`, e.g. `ldaps://ldap.example.com:636`. |
+| `SOURCE` | no | `ldap` | `ldap` reads an LDAP directory. `graph` reads one Entra group from Microsoft Graph and ignores every `LDAP_*` setting. See [Reading straight from Microsoft Entra](#reading-straight-from-microsoft-entra). |
+| `GRAPH_TENANT_ID` | with `graph` | | Directory (tenant) ID, or the tenant's domain. |
+| `GRAPH_CLIENT_ID` | with `graph` | | Application (client) ID of an app registration with the `GroupMember.Read.All` and `User.Read.All` application permissions. |
+| `GRAPH_CLIENT_SECRET` | with `graph` | | That app's client secret. |
+| `GRAPH_GROUP_ID` | with `graph` | | Object ID of the group to sync. Every user in it, including nested groups, gets an entry. |
+| `GRAPH_TAG_GUESTS` | no | `false` | `true` gives guests `EXTERNAL_TAG` instead of their company tag. |
+| `LDAP_URL` | with `ldap` | | `ldaps://host[:port]` or `ldap://host[:port]`, e.g. `ldaps://ldap.example.com:636`. |
 | `LDAP_TLS_NAME` | no | host from `LDAP_URL` | Name the server certificate must be valid for. Lets you connect to a container name while validating the certificate's real name. |
-| `LDAP_BIND_DN` | yes | | |
-| `LDAP_BIND_PASSWORD` | yes | | |
-| `LDAP_BASE` | yes | | Search base, e.g. `ou=people,dc=example,dc=com`. |
+| `LDAP_BIND_DN` | with `ldap` | | |
+| `LDAP_BIND_PASSWORD` | with `ldap` | | |
+| `LDAP_BASE` | with `ldap` | | Search base, e.g. `ou=people,dc=example,dc=com`. |
 | `LDAP_FILTER` | no | `(&(uid=*)(mail=*))` | Which entries are users. |
 | `LDAP_ATTR_NAME` | no | `displayName,cn,uid` | Name attributes, tried in order. |
 | `LDAP_ATTR_MAIL` | no | `mail` | Email attribute. Values that aren't email addresses (for example `null`) are skipped. |
@@ -762,6 +816,7 @@ Layout:
 | --- | --- |
 | `src/ricoh_ldap_sync/config.py` | Environment parsing and validation |
 | `src/ricoh_ldap_sync/ldap_source.py` | LDAP users, with certificate name override |
+| `src/ricoh_ldap_sync/graph_source.py` | Entra group members from Microsoft Graph (`SOURCE=graph`) |
 | `src/ricoh_ldap_sync/ricoh_soap.py` | Address book SOAP client |
 | `src/ricoh_ldap_sync/sync.py` | Plan (diff, safety brake, ownership), state file, applying changes |
 | `src/ricoh_ldap_sync/main.py` | Worker loop, `--once`, `--dry-run`, run lock |

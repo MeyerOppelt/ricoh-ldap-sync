@@ -1,0 +1,37 @@
+# Example deployment reading one Microsoft Entra group from Microsoft Graph,
+# with no LDAP server. Every value is a placeholder: set real ones in your
+# environment or a secrets manager, never in this file.
+services:
+  ricoh-ldap-sync:
+    image: ghcr.io/meyeroppelt/ricoh-ldap-sync:0.7.0
+    restart: unless-stopped
+    environment:
+      SOURCE: graph
+      GRAPH_TENANT_ID: ${GRAPH_TENANT_ID:?}
+      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:?}  # app with GroupMember.Read.All and User.Read.All (application)
+      GRAPH_CLIENT_SECRET: ${GRAPH_CLIENT_SECRET:?}
+      GRAPH_GROUP_ID: ${GRAPH_GROUP_ID:?}  # Object ID of the group to sync
+      GRAPH_TAG_GUESTS: ${GRAPH_TAG_GUESTS:-false}  # true: guests get EXTERNAL_TAG instead of their company tag
+      EXTERNAL_TAG: ${EXTERNAL_TAG:-EXT}
+      COMPANY_TAGS: ${COMPANY_TAGS:-}  # optional overrides, e.g. {"Example Holdings":"EH"}; default is the first 4 characters
+      PRINTERS: ${PRINTERS:?}  # e.g. [{"name":"office","host":"192.0.2.10"}]
+      RICOH_USER: ${RICOH_USER:-admin}
+      RICOH_PASSWORD: ${RICOH_PASSWORD:?}
+      # Leave TS_AUTHKEY empty to reach printers directly without Tailscale.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_LOGIN_SERVER: ${TS_LOGIN_SERVER:-}  # e.g. https://headscale.example.com
+      TS_HOSTNAME: ${TS_HOSTNAME:-ricoh-ldap-sync}
+      DRY_RUN: ${DRY_RUN:-true}
+      KEEP_SORTED: ${KEEP_SORTED:-false}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
+      MAX_DELETE_FRACTION: ${MAX_DELETE_FRACTION:-0.3}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./data:/data
+      - ./tailscale:/var/lib/tailscale
+    healthcheck:
+      test: ["CMD", "python", "-m", "ricoh_ldap_sync.health"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 180s

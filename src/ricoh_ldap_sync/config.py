@@ -26,8 +26,10 @@ DEFAULT_TS_HOSTNAME = "ricoh-ldap-sync"
 DEFAULT_INTERVAL_MINUTES = 15
 DEFAULT_MAX_DELETE_FRACTION = 0.3
 LOG_LEVELS = ("debug", "info", "warning", "error")
+SOURCES = ("ldap", "graph")
 
 _PRINTER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -52,16 +54,22 @@ class Printer:
 
 @dataclass(frozen=True)
 class Config:
-    ldap_url: str
-    ldap_tls_name: str
-    ldap_bind_dn: str
-    ldap_bind_password: str = field(repr=False)
+    source: str = "ldap"
+    ldap_url: str = ""
+    ldap_tls_name: str = ""
+    ldap_bind_dn: str = ""
+    ldap_bind_password: str = field(default="", repr=False)
     ldap_base: str = ""
     ldap_filter: str = DEFAULT_LDAP_FILTER
     ldap_attr_name: tuple[str, ...] = ("displayName", "cn", "uid")
     ldap_attr_mail: str = DEFAULT_ATTR_MAIL
     ldap_attr_company: str = ""
     ldap_attr_external: str = ""
+    graph_tenant_id: str = ""
+    graph_client_id: str = ""
+    graph_client_secret: str = field(default="", repr=False)
+    graph_group_id: str = ""
+    graph_tag_guests: bool = False
     external_tag: str = "EXT"
     company_tags: dict[str, str] = field(default_factory=dict)
     printers: tuple[Printer, ...] = ()
@@ -111,24 +119,40 @@ def load(env: Mapping[str, str] | None = None) -> Config:
             problems.append(f"{name} is required{hint}")
         return value
 
-    ldap_url = required("LDAP_URL", " (e.g. ldaps://ldap.example.com:636)")
-    if ldap_url:
-        try:
-            parts = urlsplit(ldap_url)
-            parts.port  # raises ValueError on a malformed port
-        except ValueError:
-            parts = None
-        if parts is None or parts.scheme not in ("ldap", "ldaps") or not parts.hostname:
-            problems.append("LDAP_URL must look like ldaps://host[:port] or ldap://host[:port]")
-            ldap_url = ""
-    ldap_tls_name = get("LDAP_TLS_NAME") or (urlsplit(ldap_url).hostname if ldap_url else None) or ""
+    source = (get("SOURCE") or "ldap").lower()
+    if source not in SOURCES:
+        problems.append(f"SOURCE must be one of {', '.join(SOURCES)} (got {source!r})")
 
-    ldap_bind_dn = required("LDAP_BIND_DN")
-    ldap_bind_password = required("LDAP_BIND_PASSWORD")
-    ldap_base = required("LDAP_BASE")
+    ldap_url = ldap_tls_name = ldap_bind_dn = ldap_bind_password = ldap_base = ""
     ldap_filter = get("LDAP_FILTER") or DEFAULT_LDAP_FILTER
-    if not (ldap_filter.startswith("(") and ldap_filter.endswith(")")):
-        problems.append("LDAP_FILTER must be an LDAP filter in parentheses, e.g. (&(uid=*)(mail=*))")
+    if source == "ldap":
+        ldap_url = required("LDAP_URL", " (e.g. ldaps://ldap.example.com:636)")
+        if ldap_url:
+            try:
+                parts = urlsplit(ldap_url)
+                parts.port  # raises ValueError on a malformed port
+            except ValueError:
+                parts = None
+            if parts is None or parts.scheme not in ("ldap", "ldaps") or not parts.hostname:
+                problems.append("LDAP_URL must look like ldaps://host[:port] or ldap://host[:port]")
+                ldap_url = ""
+        ldap_tls_name = get("LDAP_TLS_NAME") or (urlsplit(ldap_url).hostname if ldap_url else None) or ""
+
+        ldap_bind_dn = required("LDAP_BIND_DN")
+        ldap_bind_password = required("LDAP_BIND_PASSWORD")
+        ldap_base = required("LDAP_BASE")
+        if not (ldap_filter.startswith("(") and ldap_filter.endswith(")")):
+            problems.append("LDAP_FILTER must be an LDAP filter in parentheses, e.g. (&(uid=*)(mail=*))")
+
+    graph_tenant_id = graph_client_id = graph_client_secret = graph_group_id = ""
+    if source == "graph":
+        graph_tenant_id = required("GRAPH_TENANT_ID", " (the Directory (tenant) ID of the app registration)")
+        graph_client_id = required("GRAPH_CLIENT_ID", " (the Application (client) ID of the app registration)")
+        graph_client_secret = required("GRAPH_CLIENT_SECRET")
+        graph_group_id = required("GRAPH_GROUP_ID", " (the Object ID of the Entra group to sync)")
+        if graph_group_id and not _GUID.match(graph_group_id):
+            problems.append("GRAPH_GROUP_ID must be the group's Object ID, e.g. 00000000-0000-0000-0000-000000000000")
+    graph_tag_guests = _bool(get("GRAPH_TAG_GUESTS"), False, "GRAPH_TAG_GUESTS", problems)
 
     attr_name = tuple(a.strip() for a in (get("LDAP_ATTR_NAME") or DEFAULT_ATTR_NAME).split(",") if a.strip())
     if not attr_name:
@@ -167,6 +191,7 @@ def load(env: Mapping[str, str] | None = None) -> Config:
         raise ConfigError(problems)
 
     return Config(
+        source=source,
         ldap_url=ldap_url,
         ldap_tls_name=ldap_tls_name,
         ldap_bind_dn=ldap_bind_dn,
@@ -177,6 +202,11 @@ def load(env: Mapping[str, str] | None = None) -> Config:
         ldap_attr_mail=attr_mail,
         ldap_attr_company=attr_company,
         ldap_attr_external=attr_external,
+        graph_tenant_id=graph_tenant_id,
+        graph_client_id=graph_client_id,
+        graph_client_secret=graph_client_secret,
+        graph_group_id=graph_group_id,
+        graph_tag_guests=graph_tag_guests,
         external_tag=external_tag,
         company_tags=company_tags,
         printers=printers,

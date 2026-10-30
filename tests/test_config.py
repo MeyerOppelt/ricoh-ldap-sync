@@ -145,3 +145,46 @@ def test_secrets_not_in_errors_or_repr():
     assert not any("secret" in x for x in p)
     cfg = load()
     assert "secret" not in repr(cfg)
+
+
+GRAPH = {
+    "SOURCE": "graph",
+    "GRAPH_TENANT_ID": "tenant.example.com",
+    "GRAPH_CLIENT_ID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "GRAPH_CLIENT_SECRET": "secret-graph",
+    "GRAPH_GROUP_ID": "11111111-2222-3333-4444-555555555555",
+    "PRINTERS": '[{"name":"office-1","host":"192.0.2.10"}]',
+    "RICOH_PASSWORD": "secret-printer",
+}
+
+
+def test_source_defaults_to_ldap():
+    assert load().source == "ldap"
+
+
+def test_graph_source_needs_no_ldap_settings():
+    cfg = config.load(GRAPH)
+    assert (cfg.source, cfg.graph_group_id, cfg.graph_tag_guests) == ("graph", GRAPH["GRAPH_GROUP_ID"], False)
+    assert cfg.ldap_url == ""
+    assert "secret-graph" not in repr(cfg)
+
+
+def test_graph_source_requires_its_settings():
+    with pytest.raises(config.ConfigError) as e:
+        config.load({"SOURCE": "GRAPH", "PRINTERS": GRAPH["PRINTERS"], "RICOH_PASSWORD": "pw"})
+    joined = "\n".join(e.value.problems)
+    for var in ("GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET", "GRAPH_GROUP_ID"):
+        assert var in joined
+    assert "LDAP_URL" not in joined
+
+
+@pytest.mark.parametrize("var, value", [
+    ("SOURCE", "csv"),
+    ("GRAPH_GROUP_ID", "Printer Directory"),
+    ("GRAPH_TAG_GUESTS", "sometimes"),
+])
+def test_bad_graph_values_name_the_variable(var, value):
+    with pytest.raises(config.ConfigError) as e:
+        config.load({**GRAPH, var: value})
+    assert any(var in p for p in e.value.problems)
+    assert not any("secret" in p for p in e.value.problems)

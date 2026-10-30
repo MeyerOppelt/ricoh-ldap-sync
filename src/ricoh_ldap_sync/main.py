@@ -18,7 +18,7 @@ import sys
 import time
 from contextlib import contextmanager
 
-from . import __version__, check, config, ldap_source, sync
+from . import __version__, check, config, graph_source, ldap_source, sync
 from .ricoh_soap import RicohClient, RicohError
 
 log = logging.getLogger("ricoh_ldap_sync")
@@ -45,14 +45,17 @@ def run_lock(path: str = LOCK_FILE):
 
 
 def run_once(cfg: config.Config, state_path: str, force_renumber: bool = False) -> bool:
-    """One sync of every printer. Returns True if LDAP and every printer succeeded."""
+    """One sync of every printer. Returns True if the source and every printer succeeded."""
+    source = graph_source if cfg.source == "graph" else ldap_source
     try:
-        users = ldap_source.fetch_users(cfg)
-    except ldap_source.LdapError as e:
-        log.error("ldap: %s; skipping this run for every printer", e)
+        users = source.fetch_users(cfg)
+    except (ldap_source.LdapError, graph_source.GraphError) as e:
+        log.error("%s: %s; skipping this run for every printer", cfg.source, e)
         return False
-    log.info("ldap: %d users", len(users))
-    if not users:
+    log.info("%s: %d users", cfg.source, len(users))
+    if not users and cfg.source == "graph":
+        log.error("graph: no member of group %s has an email address; nothing will be deleted", cfg.graph_group_id)
+    elif not users:
         log.error("ldap: no usable users under %s matching %s (each needs %s and one of %s); nothing will be deleted",
                   cfg.ldap_base, cfg.ldap_filter, cfg.ldap_attr_mail, ", ".join(cfg.ldap_attr_name))
 

@@ -1,4 +1,4 @@
-"""Connectivity check: tailnet, printer reachability and LDAP, without changing anything.
+"""Connectivity check: tailnet, printer reachability and LDAP or Graph, without changing anything.
 
 Run inside the container with ``python -m ricoh_ldap_sync.check``. Prints one
 PASS/FAIL/INFO line per check and exits non-zero if any check failed. It prints
@@ -17,7 +17,7 @@ import time
 
 import requests
 
-from . import config, ldap_source, tailnet
+from . import config, graph_source, ldap_source, tailnet
 
 PRINTER_TIMEOUT = (10, 20)
 DATA_DIR = "/data"
@@ -169,6 +169,26 @@ def check_ldap(cfg: config.Config, r: Report, wait: float = 0) -> None:
         conn.unbind()
 
 
+def check_graph(cfg: config.Config, r: Report) -> None:
+    with requests.Session() as s:
+        try:
+            graph_source.sign_in(s, cfg)
+        except graph_source.GraphError as e:
+            r.line("FAIL", "graph sign-in", str(e))
+            return
+        r.line("PASS", "graph sign-in", f"app {cfg.graph_client_id} in tenant {cfg.graph_tenant_id}")
+        try:
+            g = graph_source.group(s, cfg)
+            r.line("PASS", "graph group", f"{g.get('displayName')!r} ({cfg.graph_group_id})")
+            found = graph_source.members(s, cfg)
+        except graph_source.GraphError as e:
+            r.line("FAIL", "graph group", str(e))
+            return
+    users = graph_source.to_users(found, cfg)
+    r.line("PASS" if users else "FAIL", "graph members",
+           f"{graph_source.describe(found)}; {len(users)} usable users")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m ricoh_ldap_sync.check", description=__doc__.splitlines()[0])
     parser.add_argument("--wait", type=float, default=0, metavar="SECONDS",
@@ -180,12 +200,17 @@ def main(argv: list[str] | None = None) -> int:
         print(e, file=sys.stderr)
         return 2
     r = Report()
+    source = (f"Microsoft Graph group {cfg.graph_group_id}" if cfg.source == "graph"
+              else f"LDAP {cfg.ldap_url} (certificate name {cfg.ldap_tls_name})")
     r.line("INFO", "config", f"{len(cfg.printers)} printer(s): " + ", ".join(f"{p.name}={p.host}" for p in cfg.printers)
-           + f"; LDAP {cfg.ldap_url} (certificate name {cfg.ldap_tls_name})")
+           + f"; {source}")
     check_data(r)
     check_tailnet(cfg, r)
     check_printers(cfg, r)
-    check_ldap(cfg, r, wait=args.wait)
+    if cfg.source == "graph":
+        check_graph(cfg, r)
+    else:
+        check_ldap(cfg, r, wait=args.wait)
     print("RESULT: " + ("FAILED" if r.failed else "all checks passed"), flush=True)
     return 1 if r.failed else 0
 
